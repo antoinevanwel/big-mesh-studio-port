@@ -1,0 +1,115 @@
+# SolidRT app - agent notes
+
+This project uses SolidRT: a custom SolidJS renderer that paints through a Rust
+runtime. No DOM, no HTML, no CSS cascade. If you are an AI assistant, read this
+whole file before writing or editing code here - it is short on purpose. The
+depth lives in the topic files listed under "Read before you", one of which you
+should open whenever the work matches its trigger.
+
+## Levels: core, and extensions on top
+
+- @solidrt/core is the low-level foundation: host intrinsics (`<window>`,
+  `<view>`, `<text>`, the detached `d-*` drawing primitives) with flat props
+  that feed the layout and paint engine directly. An app can be written
+  entirely at this level. Laid-out `<view>`/`<text>` are the default
+  building blocks for a screen; the detached `d-*` forms are for drawn
+  geometry and animation hot spots, not general structure (core's AGENTS.md
+  has the rule). d-* elements go under anything; laid-out elements
+  only under laid-out parents (a `<view>` inside a `<d-view>` throws), so a
+  component's doc comment says which kind it renders.
+- Extensions build on core. The first-party ones are @solidrt/components
+  (UI components), @solidrt/2d (2D graphics), @solidrt/3d (3D graphics) and
+  @solidrt/router (screens as routes).
+  None is privileged - an extension is just functions returning core JSX,
+  and an app can use a third-party one or grow its own.
+
+Match the level the code you are editing already uses. package.json shows
+the choice this app made: only the extensions listed there are installed -
+do not add one for a change core covers.
+
+Convention: every @solidrt package describes itself in
+node_modules/@solidrt/<name>/AGENTS.md, carries its prose in docs/, and
+ships working code in examples/. AGENTS.md is the reference for the package;
+open it before using anything from the package, and read the extensions'
+files only when they are installed.
+
+## Read before you
+
+The authoritative references ship inside the installed packages. Open the one
+that matches the work; do not work from memory of what a web framework does.
+
+- write any reactive code (signals, effects, control flow) ->
+  node_modules/solid-js/CHEATSHEET.md - the SolidJS 2.0 model
+- touch elements, props, events, gestures or text ->
+  node_modules/@solidrt/core/AGENTS.md, and
+  node_modules/@solidrt/core/src/types.d.ts + jsx-runtime.d.ts (source of truth)
+- style a screen: a background, a gradient, a shadow, an effect, vector art,
+  a chart -> node_modules/@solidrt/core/agents/painting.md
+- write per-frame code, an animation, synchronous work heavy enough to
+  freeze the UI (a big parse, a simulation step - isolates take it off
+  the thread), or anything writing properties in a loop ->
+  node_modules/@solidrt/core/agents/performance.md
+- use an installed extension (UI components, 2D, 3D) ->
+  node_modules/@solidrt/<name>/AGENTS.md and its examples/
+- persist data (a settings file, a database, anything that must survive a
+  restart) -> node_modules/@solidrt/flux-types/modules/fs.d.ts and
+  sqlite.d.ts (`flux:fs`, `flux:sqlite`; a relative path is the app's own
+  persistent storage folder), and node_modules/@solidrt/core/src/data.ts
+  (`createQuery`/`createQueryRow` from `@solidrt/core/data`, reactive reads
+  over a `flux:sqlite` database)
+- debug a running app, or drive it over MCP to verify a change ->
+  node_modules/@solidrt/cli/agents/debugging.md
+- write or repair a test (`bun run sol test`) ->
+  node_modules/@solidrt/cli/agents/testing.md (the method) and
+  node_modules/@solidrt/test/AGENTS.md (the API)
+- add an asset or font, set the app's identity, or build for distribution ->
+  node_modules/@solidrt/cli/agents/assets.md
+- run, bundle, typecheck or render headlessly ->
+  node_modules/@solidrt/cli/AGENTS.md
+- copy a working pattern -> node_modules/@solidrt/core/examples/ (see its
+  README.md index)
+
+<!-- Claude Code auto-imports these; other tools read the paths above. -->
+@./node_modules/solid-js/CHEATSHEET.md
+@./node_modules/@solidrt/core/AGENTS.md
+@./node_modules/@solidrt/components/AGENTS.md
+@./node_modules/@solidrt/3d/AGENTS.md
+@./node_modules/@solidrt/router/AGENTS.md
+@./node_modules/@solidrt/cli/AGENTS.md
+
+## The three traps that cost the most (this is not React/DOM)
+
+Each package's AGENTS.md carries its own trap list; these three are
+platform-wide and bite in every app:
+
+1. Reading a signal/prop/store at the top level of a component body (not
+   inside JSX, a `createMemo`, or an effect's compute phase) reads it
+   untracked - it silently freezes at the initial value. `createEffect` is
+   two-argument here: `(compute, apply)`; the Solid 1.x single-arg form does
+   not track.
+2. Writing a signal or store from inside an owned scope - a component body,
+   a `createMemo`, an effect's compute phase, a `ref` callback - throws
+   `REACTIVE_WRITE_IN_OWNED_SCOPE` in dev; `untrack` does NOT exempt a
+   write. Move the write into an event handler, an effect's apply phase, or
+   `onSettled`; opt in with `createSignal(v, { ownedWrite: true })` for
+   internal state.
+3. An element-valued prop (children, a content/icon slot) builds a fresh
+   native subtree on EVERY read, and an uninserted subtree is never freed -
+   a permanent memory leak, not wasted work. Read such props exactly once,
+   where they mount; inspect them through the `children()` helper.
+
+## Run / verify
+
+- FIRST check whether a dev server and its clients (possibly several) are
+  already running and build against those; do not start a second `sol run`
+  when one is up. `reload` reaches every connected client; the per-client
+  tools are listed in debugging.md.
+- The dev loop (reload, logs, snapshots, the holds on reload-on-save and on
+  the user's input), typechecking, headless rendering and the MCP tools:
+  node_modules/@solidrt/cli/AGENTS.md and its agents/debugging.md. Read it
+  before the first reload. The `.mcp.json` here is Claude Code's convention;
+  if your client lists no `solidrt` tools, debugging.md has the entry to add
+  to its own config.
+- Tests: `bun run sol test` or `bun run test` (not `bun test`, which is Bun's
+  own runner and cannot load them). They live in tests/; to write one, see
+  the test entry under "Read before you".

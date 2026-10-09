@@ -1,0 +1,48 @@
+{
+  "name": "big-mesh-studio-port",
+  "type": "module",
+  "private": true,
+  "solidrt": {
+    "appId": null,
+    "displayName": null,
+    "icon": null,
+    "iconBackground": null,
+    "capabilities": {
+      "camera": true,
+      "microphone": true,
+      "vibration": true,
+      "internet": true
+    },
+    "backup": false,
+    "runtime": null,
+    "android": {
+      "versionCode": null,
+      "permissions": []
+    },
+    "fonts": {
+      "sans": true,
+      "serif": true,
+      "mono": true
+    }
+  },
+  "scripts": {
+    "dev": "sol run --lan",
+    "pack": "sol pack",
+    "server": "sol server",
+    "client": "sol client",
+    "android": "sol android",
+    "test": "sol test"
+  },
+  "dependencies": {
+    "@solidrt/core": "0.0.70",
+    "@solidrt/components": "0.0.70",
+    "@solidrt/3d": "0.0.70",
+    "@solidrt/router": "0.0.70"
+  },
+  "devDependencies": {
+    "@solidrt/cli": "0.0.70",
+    "@solidrt/flux-types": "0.0.70",
+    "@solidrt/test": "0.0.70",
+    "typescript": "^7"
+  }
+}

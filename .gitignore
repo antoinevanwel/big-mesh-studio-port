@@ -1,0 +1,5 @@
+node_modules/
+*.sol.js
+*.fluxbc
+.solidrt-data/
+dist/
