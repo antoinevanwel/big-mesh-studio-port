@@ -7,38 +7,61 @@
 // model has been still for REBUILD_MS, so a drag or a run of typing is one
 // rebuild rather than one per change.
 //
-// Wide windows lay the panels over the view (the parts on the left, the
-// selected part on the right); a compact one stacks the view above one
-// panel at a time, chosen by tabs, so the two can never overlap; a chevron
-// beside the tabs folds that panel away, and tapping a tab opens it again.
+// Wide windows lay the panels over the view (the parts on the left; on the
+// right the selected part above the brush); a compact one stacks the view
+// above one panel at a time, chosen by tabs, so they can never overlap; a
+// chevron beside the tabs folds that panel away, and tapping a tab opens it
+// again.
+//
+// Paint is a journal of dabs in part-local space (the only durable paint
+// state, saved in the project) rasterised into a sparse field of world
+// voxels the model's material samples. The field is made by the first
+// stroke, sized to the model then, and rebuilt from the journal by undo,
+// redo and opening a file.
 
-import { capabilities, createEffect, createMemo, createSignal, onSettled, pct, Show, textInputActive, windowSize, type KeyEvent } from "@solidrt/core"
+import { capabilities, createEffect, createMemo, createSignal, Match, onSettled, pct, Show, Switch, textInputActive, windowSize, type KeyEvent } from "@solidrt/core"
 import { Button, Card, Modal, ScrollView, SegmentedControl, Slider, Text, View } from "@solidrt/components"
 import { isolate } from "flux:isolate"
 import { cleanName, clearDraft, deleteModel, listModels, modelExists, readDraft, readModel, saveDraft, saveModel, writeExport, type SavedModel } from "../file/library"
 import { readProject, writeProject, type Project } from "../file/project"
-import { DEFAULT_MESH_MODE, DEFAULT_RESOLUTION, MESH_MODES, RESOLUTIONS, type MeshMode, type Resolution } from "../mesh/mesh-model"
+import { budgetFor, DEFAULT_MESH_MODE, DEFAULT_RESOLUTION, MESH_MODES, meshRegion, RESOLUTIONS, type MeshMode, type Resolution } from "../mesh/mesh-model"
 import { describeReport } from "../mesh/report"
 import type * as Mesher from "../mesher"
 import type { ViewMesh } from "../mesher"
-import { nearestPart } from "../model/field"
+import { Field, nearestPart } from "../model/field"
 import { createModelStore } from "../model/model-store"
 import { createPalette, STARTER_PALETTE } from "../model/palette"
-import { modelBounds, newModel, type Part } from "../model/part"
+import { conjugate, modelBounds, newModel, pointInPartFrame, rotate, type Part } from "../model/part"
 import { isAxial } from "../model/primitives"
 import type { Vec3 } from "../model/types"
+import { PaintBrush, type Localiser } from "../paint/brush"
+import { BRICK, GRID_RES, PaintField } from "../paint/field"
+import { PaintJournal, type RemovedDabs } from "../paint/journal"
+import { rasterise, type Placed } from "../paint/rasterise"
 import { DEFAULT_HEIGHT_MM, DEFAULT_MAX_COLOURS, DEFAULT_PRINT_VOXEL_SIZE, describePrintEstimate, MIN_PRINT_VOXEL_SIZE, printEstimate, printVoxelSizeOk } from "../print/print"
 import { registerShortcuts } from "../state"
 import { PANEL, QUIET } from "../theme"
+import { BrushPanel, defaultBrush, type BrushState } from "../ui/brush-panel"
 import { FilesPanel } from "../ui/files-panel"
 import { PartsPanel } from "../ui/parts-panel"
 import { TransformPanel } from "../ui/transform-panel"
+import type { BrushSurface, FieldHit } from "../view/field-hit"
 import { Viewport, type Tool } from "../view/viewport"
 
 /** How long the model has to be still before it is re-meshed, in ms. */
 const REBUILD_MS = 90
 /** How long after a rebuild the draft is written, in ms. */
 const AUTOSAVE_MS = 1000
+
+/** The paint field's voxel, in world units: absolute, so a figure twice the size gets twice the voxels. */
+const PAINT_VOXEL = 0.05
+/** The widest box a field addresses: 64 bricks of 8 voxels. */
+const PAINT_REACH = GRID_RES * BRICK * PAINT_VOXEL
+/** Bricks a side of the pool: 1728 bricks, 7 MB. Running out drops a stroke's outermost voxels. */
+const PAINT_TILES = 12
+const PAINT_DETAIL = `${1 / PAINT_VOXEL} paint texels a world unit`
+/** How far past the model's bounds the field reaches, for a brush at its silhouette. */
+const PAINT_PAD = 4
 
 // Two mesher instances: the model's rebuilds queue on one, so a drag ghost
 // or an export never waits behind a fine-resolution rebuild.
@@ -55,7 +78,7 @@ export function Modeller() {
   let [tool, setTool] = createSignal<Tool>("select")
   let [mode, setMode] = createSignal<MeshMode>(DEFAULT_MESH_MODE)
   let [resolution, setResolution] = createSignal<Resolution>(DEFAULT_RESOLUTION)
-  let [sheet, setSheet] = createSignal<"parts" | "shape">("parts")
+  let [sheet, setSheet] = createSignal<"parts" | "shape" | "paint">("parts")
   // A compact window can fold the panel down to its tabs, giving the view the
   // height back. Open by default: the tabs are how the parts list is found.
   let [sheetOpen, setSheetOpen] = createSignal(true)
@@ -83,6 +106,19 @@ export function Modeller() {
     return found === undefined ? "" : describePrintEstimate(found)
   }
   let replacing: string | undefined
+
+  // The paint. The journal and the field are plain values (nothing renders
+  // from them directly); the signals say what the panel and the view show.
+  let journal = new PaintJournal()
+  let field: PaintField | undefined
+  let painter: PaintBrush | undefined
+  let [paintField, setPaintField] = createSignal<PaintField | undefined>()
+  let [paintRevision, setPaintRevision] = createSignal(0)
+  let [dabCount, setDabCount] = createSignal(0)
+  let [brush, setBrush] = createSignal<BrushState>(defaultBrush({ r: 255, g: 255, b: 255, a: 255 }))
+  let [blend, setBlend] = createSignal(0)
+  // The folded field the brush traces, replaced with each mesh it describes.
+  let [surface, setSurface] = createSignal<BrushSurface | undefined>()
 
   let selected = createMemo((): Part | undefined => {
     let id = store.selected()
@@ -122,6 +158,7 @@ export function Modeller() {
 
   let install = (job: Job, result: ViewMesh | null) => {
     setMesh(result ?? undefined)
+    setSurface(result === null ? undefined : { field: new Field(job.parts), step: meshRegion(job.parts, budgetFor(DEFAULT_RESOLUTION))?.sampleSize ?? DEFAULT_RESOLUTION, parts: job.parts })
     let bounds = modelBounds(job.parts)
     if (bounds !== undefined) {
       setFrame({
@@ -154,13 +191,141 @@ export function Modeller() {
 
   let project = (): Project => ({ parts: store.parts(), palette: palette.colours(), view: { mode: mode(), resolution: resolution() } })
 
+  // -- Paint ------------------------------------------------------------------
+
+  /** A world point and normal into a part's own frame, and a dab back out to the world. */
+  let partTransforms = (parts: readonly Part[]): { localise: Localiser; place: (part: number, centre: Vec3, normal: Vec3) => Placed | undefined } => ({
+    localise: (part, point, normal) => {
+      let own = pointInPartFrame(parts[part]!, point)
+      let turned = rotate(normal, conjugate(parts[part]!.orientation))
+      return { centre: [own.x, own.y, own.z], normal: [turned.x, turned.y, turned.z] }
+    },
+    place: (part, centre, normal) => {
+      let own = parts[part]
+      if (own === undefined) return undefined
+      let turned = rotate(centre, own.orientation)
+      let n = rotate(normal, own.orientation)
+      let length = Math.hypot(n.x, n.y, n.z)
+      return {
+        centre: { x: turned.x + own.origin.x, y: turned.y + own.origin.y, z: turned.z + own.origin.z },
+        normal: length === 0 ? { x: 0, y: 1, z: 0 } : { x: n.x / length, y: n.y / length, z: n.z / length },
+      }
+    },
+  })
+
+  let painted = () => setPaintRevision(revision => revision + 1)
+
+  /**
+   * The field for a model, made once and then kept: a cube over its bounds,
+   * padded, at an absolute voxel size. A model too wide for the grid gets
+   * none and says so, rather than throwing in the middle of a drag.
+   */
+  let ensureField = (parts: readonly Part[]): PaintField | undefined => {
+    if (field !== undefined) return field
+    let bounds = modelBounds(parts)
+    if (bounds === undefined) return undefined
+    let span = (lo: number, hi: number) => hi - lo + PAINT_PAD * 2
+    let side = Math.max(span(bounds.min.x, bounds.max.x), span(bounds.min.y, bounds.max.y), span(bounds.min.z, bounds.max.z))
+    if (side > PAINT_REACH) {
+      setNotice("this model is too large for the paint field at its current resolution; move the parts closer together or use a smaller model")
+      return undefined
+    }
+    field = PaintField.over(PAINT_VOXEL, [bounds.min.x - PAINT_PAD, bounds.min.y - PAINT_PAD, bounds.min.z - PAINT_PAD], [side, side, side], PAINT_TILES)
+    setPaintField(field)
+    return field
+  }
+
+  /** The field cleared and the whole journal replayed: undo, redo and a clear are all this. */
+  let rasteriseJournal = () => {
+    if (field === undefined) return
+    field.clearAll()
+    rasterise(journal, field, partTransforms(store.parts()).place)
+    field.markChanged()
+    painted()
+  }
+
+  /** Drops the document's paint, for another document: the field was sized to this one. */
+  let resetPaint = () => {
+    journal.clear()
+    setDabCount(0)
+    field = undefined
+    setPaintField(undefined)
+  }
+
+  let paintStart = (): boolean => {
+    let parts = store.parts()
+    if (painter !== undefined || surface() === undefined || parts.length === 0) return false
+    let made = ensureField(parts)
+    if (made === undefined) return false
+    // Taken once: a drag's brush cannot change under it.
+    let held = brush()
+    let { localise, place } = partTransforms(parts)
+    painter = new PaintBrush(journal, made, { radius: held.width / 2, hardness: held.hardness, colour: held.colour }, localise, place)
+    return true
+  }
+
+  let paintMove = (hit: FieldHit) => {
+    painter?.moveTo(hit)
+    painted()
+  }
+
+  // One undo entry per stroke; its inverse is a truncation and a replay.
+  let paintEnd = (): boolean => {
+    let recorder = painter
+    painter = undefined
+    if (recorder === undefined) return false
+    let result = recorder.finish()
+    setDabCount(journal.count)
+    if (result.dabs === 0) return false
+    let taken: RemovedDabs | undefined
+    armDraft()
+    store.record({
+      label: "Paint",
+      apply: () => {
+        if (taken !== undefined) journal.redoStroke(taken)
+        rasteriseJournal()
+        setDabCount(journal.count)
+        armDraft()
+      },
+      invert: () => {
+        taken = journal.undoStroke()
+        rasteriseJournal()
+        setDabCount(journal.count)
+        armDraft()
+      },
+    })
+    return true
+  }
+
+  let clearPaint = () => {
+    if (journal.count === 0 || field === undefined) return
+    let taken: RemovedDabs | undefined
+    let clear = () => {
+      taken = journal.clearWithUndo()
+      rasteriseJournal()
+      setDabCount(journal.count)
+      armDraft()
+    }
+    clear()
+    store.record({
+      label: "Clear paint",
+      apply: clear,
+      invert: () => {
+        if (taken !== undefined) journal.redoStroke(taken)
+        rasteriseJournal()
+        setDabCount(journal.count)
+        armDraft()
+      },
+    })
+  }
+
   let draftTimer: ReturnType<typeof setTimeout> | undefined
   let armDraft = () => {
     if (!restored) return
     if (draftTimer !== undefined) clearTimeout(draftTimer)
     draftTimer = setTimeout(() => {
       let at = Date.now()
-      void writeProject(project()).then(bytes => saveDraft(bytes, at)).then(
+      void writeProject(project(), journal).then(bytes => saveDraft(bytes, at)).then(
         () => setDraftAt(at),
         () => {},
       )
@@ -171,7 +336,21 @@ export function Modeller() {
     setMode(opened.view.mode)
     setResolution(opened.view.resolution)
     palette.set(opened.palette)
-    return store.load(opened.parts, label)
+    let loaded = store.load(opened.parts, label)
+    // The paint goes with the document it belongs to; a loaded journal is
+    // in the place a drawn one is: the truth, with nothing in a field yet.
+    resetPaint()
+    if (opened.paint !== undefined) {
+      journal.adopt(opened.paint)
+      setDabCount(journal.count)
+      let made = ensureField(opened.parts)
+      if (made !== undefined) {
+        rasterise(journal, made, partTransforms(opened.parts).place)
+        made.markChanged()
+        painted()
+      }
+    }
+    return loaded
   }
 
   let refreshModels = async () => setModels(await listModels())
@@ -198,7 +377,7 @@ export function Modeller() {
         throw new Error(`a model called ${name} already exists — Save again to replace it`)
       }
       replacing = undefined
-      await saveModel(name, await writeProject(project()))
+      await saveModel(name, await writeProject(project(), journal))
       setHome(name)
       setStatus(`saved as ${name}`)
       await refreshModels()
@@ -228,6 +407,7 @@ export function Modeller() {
       palette.set([])
       setHome(undefined)
       setExported(undefined)
+      resetPaint()
       store.load(newModel(), "new model")
       setStatus("new model")
     })
@@ -322,6 +502,9 @@ export function Modeller() {
       <Button variant={tool() === "rotate" ? "primary" : "secondary"} disabled={!rotatable()} onPress={() => setTool("rotate")}>
         Rotate
       </Button>
+      <Button variant={tool() === "paint" ? "primary" : "secondary"} disabled={store.parts().length === 0} onPress={() => setTool("paint")}>
+        Paint
+      </Button>
       <SegmentedControl options={MESH_MODES.map(m => ({ value: m.value, label: m.label }))} value={mode()} onChange={setMode} layout={{ width: 128 }} />
     </View>
   )
@@ -372,6 +555,24 @@ export function Modeller() {
     </Show>
   )
 
+  let Brush = () => (
+    <BrushPanel
+      brush={brush()}
+      onWidth={width => setBrush({ ...brush(), width })}
+      onHardness={hardness => setBrush({ ...brush(), hardness })}
+      // Not remembered in the palette: the picker reports every pointer move.
+      onColour={colour => setBrush({ ...brush(), colour })}
+      palette={palette}
+      fieldDetail={paintField() === undefined ? undefined : PAINT_DETAIL}
+      dabs={dabCount()}
+      hasPaint={dabCount() > 0}
+      onClear={clearPaint}
+      blend={blend()}
+      onBlend={setBlend}
+      blendable={false}
+    />
+  )
+
   let viewport = (
     <Viewport
       mesh={mesh()}
@@ -382,6 +583,14 @@ export function Modeller() {
       onPick={point => store.select(point === undefined ? undefined : nearestPart(store.parts(), point.x, point.y, point.z)?.id)}
       onMove={(id, origin) => store.change(id, { origin })}
       onTurn={(id, orientation) => store.change(id, { orientation })}
+      surface={surface()}
+      brushRadius={brush().width / 2}
+      paintField={paintField()}
+      paintRevision={paintRevision()}
+      paintBlend={blend()}
+      onPaintStart={paintStart}
+      onPaint={paintMove}
+      onPaintEnd={paintEnd}
     />
   )
 
@@ -405,13 +614,14 @@ export function Modeller() {
             </ScrollView>
             <Footer />
           </View>
-          <Show when={selected()}>
-            <View layout={{ position: "absolute", right: 0, top: 0, bottom: 0, width: 300, padding: 12 }} style={{ backgroundColor: PANEL }}>
-              <ScrollView layout={{ flexGrow: 1, minHeight: 0 }}>
-                <Shape />
-              </ScrollView>
-            </View>
-          </Show>
+          <View layout={{ position: "absolute", right: 0, top: 0, bottom: 0, width: 300, padding: 12 }} style={{ backgroundColor: PANEL }}>
+            <ScrollView layout={{ flexGrow: 1, minHeight: 0 }}>
+              <View layout={{ gap: 16 }}>
+                <Show when={selected()}>{part => <TransformPanel part={part()} store={store} palette={palette} />}</Show>
+                <Brush />
+              </View>
+            </ScrollView>
+          </View>
         </Show>
       </View>
 
@@ -419,9 +629,17 @@ export function Modeller() {
         <Show when={sheetOpen()}>
           <View layout={{ height: pct(42), padding: 8 }} style={{ backgroundColor: PANEL }}>
             <ScrollView layout={{ flexGrow: 1, minHeight: 0 }}>
-              <Show when={sheet() === "parts"} fallback={<Shape />}>
-                <PartsPanel store={store} onDuplicate={() => setTool("move")} />
-              </Show>
+              <Switch>
+                <Match when={sheet() === "parts"}>
+                  <PartsPanel store={store} onDuplicate={() => setTool("move")} />
+                </Match>
+                <Match when={sheet() === "shape"}>
+                  <Shape />
+                </Match>
+                <Match when={sheet() === "paint"}>
+                  <Brush />
+                </Match>
+              </Switch>
             </ScrollView>
           </View>
         </Show>
@@ -431,6 +649,7 @@ export function Modeller() {
               options={[
                 { value: "parts" as const, label: `Parts (${store.parts().length})` },
                 { value: "shape" as const, label: "Shape" },
+                { value: "paint" as const, label: "Paint" },
               ]}
               value={sheet()}
               onChange={id => {

@@ -15,7 +15,7 @@ export { MAX_PARTS }
 
 export const HISTORY_LIMIT = 100
 
-interface HistoryEntry {
+export interface HistoryEntry {
   readonly label: string
   apply: () => void
   readonly invert: () => void
@@ -63,6 +63,12 @@ export interface ModelStore {
   readonly load: (parts: readonly Part[], label: string) => boolean
   readonly undo: () => void
   readonly redo: () => void
+  /**
+   * Puts an edit the store does not own (a paint stroke) on the same undo
+   * stack, so undo walks back through both in the order they were made.
+   * The caller has already applied it.
+   */
+  readonly record: (entry: HistoryEntry) => void
 }
 
 const same = (a: unknown, b: unknown): boolean => JSON.stringify(a) === JSON.stringify(b)
@@ -248,6 +254,8 @@ export const createModelStore = (initial: readonly Part[] = []): ModelStore => {
       undoStack.push(entry)
       publishHistory()
     },
+
+    record,
   }
   return store
 }

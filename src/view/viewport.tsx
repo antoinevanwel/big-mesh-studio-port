@@ -1,13 +1,16 @@
 // The 3D view: the meshed model under an orbit camera, a translucent amber
 // box around the selected part, the move tool's arrows or the rotate
-// tool's rings on it, and the ghost a drag moves or turns before it is
-// committed. Laid out (fills its parent).
+// tool's rings on it, the ghost a drag moves or turns before it is
+// committed, and the paint tool's ring on the surface under the pointer.
+// Laid out (fills its parent).
 //
 // The camera's pointer feed is not handed to <Scene pointer>: the scene's
 // root forwards each press to it here, unless the press took hold of a
 // handle. Upstream's handles are grabbed in screen space (a fingertip's
 // reach from the drawn arm or ring, even where it is inside the model), so
 // a mesh claiming its own press is not enough; the gate is the root listener.
+// The paint tool takes every press on a model it can paint, as upstream's
+// does, so a drag with the brush never turns the view.
 
 import { createEffect, createInputMap, createMemo, createPointerFeed, createSignal, displayScale, For, onBeforeRender, Show } from "@solidrt/core"
 import { glsl } from "@solidrt/core/gpu"
@@ -25,6 +28,7 @@ import {
   PerspectiveCamera,
   phong,
   premultipliedColor,
+  quatFromTo,
   Scene,
   setTransform,
   shaderMaterialClass,
@@ -35,7 +39,10 @@ import type { Geometry, MeshNode, OrbitCameraHandle, SceneHandle, SceneNode, Sce
 import { axisAngle, multiply, type Part } from "../model/part"
 import { isAxial, primitiveHalfExtents } from "../model/primitives"
 import type { Quat, Vec3 } from "../model/types"
+import type { PaintField } from "../paint/field"
+import { fieldHitAlong, type BrushSurface, type FieldHit } from "./field-hit"
 import { armUnderPointer, AXES, distanceDragged, HEAD_LENGTH, HEAD_RADIUS, SHAFT_RADIUS, VIEW_SHARE, type ArmOnScreen, type Axis, type ScreenPoint } from "./move-handle"
+import { createPaintedLook } from "./paint-material"
 import { AROUND, radiansDragged, RING_VIEW_SHARE, ringUnderPointer, TUBE_RADIUS, type RingOnScreen } from "./rotate-handle"
 
 /** Vertices in @solidrt/3d's "colored" layout and their triangles. */
@@ -44,7 +51,7 @@ export interface DrawnMesh {
   readonly indices: Uint32Array
 }
 
-export type Tool = "select" | "move" | "rotate"
+export type Tool = "select" | "move" | "rotate" | "paint"
 
 export interface ViewportProps {
   readonly mesh: (DrawnMesh & { readonly translucent: boolean }) | undefined
@@ -60,6 +67,22 @@ export interface ViewportProps {
   readonly onMove: (id: string, origin: Vec3) => void
   /** A ring drag ended with the part turned. */
   readonly onTurn: (id: string, orientation: Quat) => void
+  /** The model's field for the brush to trace, or undefined before the first mesh. */
+  readonly surface: BrushSurface | undefined
+  /** The brush's radius in world units, which sizes the ring. */
+  readonly brushRadius: number
+  /** The paint field the model samples, or undefined while nothing has been painted. */
+  readonly paintField: PaintField | undefined
+  /** Bumped whenever the field's bytes change, to send them to the GPU. */
+  readonly paintRevision: number
+  /** How much paint tints rather than replaces (upstream's blend uniform). */
+  readonly paintBlend: number
+  /** A paint press began; false when there is nothing to paint (the camera takes the press). */
+  readonly onPaintStart: () => boolean
+  /** The brush is over the surface during a stroke. */
+  readonly onPaint: (hit: FieldHit) => void
+  /** The stroke ended; whether it painted anything (a tap that did not falls through to a pick). */
+  readonly onPaintEnd: () => boolean
 }
 
 const AXIS_COLOUR: Record<Axis, [number, number, number]> = {
@@ -69,6 +92,8 @@ const AXIS_COLOUR: Record<Axis, [number, number, number]> = {
 }
 /** The level editor's amber, translucent so the surface reads through it (upstream selection-box.ts). */
 const HIGHLIGHT: [number, number, number, number] = [1, 0xe0 / 255, 0x66 / 255, 0.35]
+/** The paint ring's tube, as a fraction of its radius (upstream paint-cursor.ts). */
+const RING_TUBE = 0.05
 const HELD_SCALE = 1.15
 const HELD_RING_SCALE = 1.08
 const SHAFT_LENGTH = 1 - HEAD_LENGTH
@@ -133,6 +158,8 @@ export function Viewport(props: ViewportProps) {
   let shaft = cylinder({ radiusTop: SHAFT_RADIUS, radiusBottom: SHAFT_RADIUS, height: SHAFT_LENGTH, radialSegments: 8, label: "handle-shaft" })
   let tip = cone({ radius: HEAD_RADIUS, height: HEAD_LENGTH, radialSegments: 10, label: "handle-tip" })
   let ring = torus({ radius: 1, tube: TUBE_RADIUS, radialSegments: 8, tubularSegments: AROUND, label: "handle-ring" })
+  let brushRing = torus({ radius: 1, tube: RING_TUBE, radialSegments: 6, tubularSegments: 48, label: "brush-ring" })
+  let brushLook = handleLook.instance({ params: { uColor: premultipliedColor([1, 1, 1, 0.9]) } })
   let axisLook = Object.fromEntries(AXES.map(axis => [axis, handleLook.instance({ params: { uColor: premultipliedColor(AXIS_COLOUR[axis]) } })])) as Record<Axis, ReturnType<typeof handleLook.instance>>
 
   let geometry = createMemo((): Geometry | undefined =>
@@ -143,6 +170,36 @@ export function Viewport(props: ViewportProps) {
   let [held, setHeld] = createSignal<Axis | undefined>()
   let [pose, setPose] = createSignal<Pose | undefined>()
   let [ghost, setGhost] = createSignal<Geometry | undefined>()
+
+  // The painted look exists once a field does; its textures go with it.
+  let painted = createMemo(() => (props.paintField === undefined ? undefined : createPaintedLook(props.paintField, props.paintBlend)))
+  createEffect(
+    () => {
+      void props.paintRevision
+      return painted()
+    },
+    look => look?.sync(),
+  )
+
+  // The brush: where the ring stands, the stroke in progress, and whether
+  // the last one painted (a tap that did not selects, upstream's rule).
+  let [cursor, setCursor] = createSignal<FieldHit | undefined>()
+  let stroke: { readonly pointerId: number } | undefined
+  let strokePainted: boolean | undefined
+  let brushHit = (x: number, y: number): FieldHit | undefined => {
+    if (scene === undefined || props.surface === undefined) return undefined
+    let ray = scene.screenRay(x, y)
+    return fieldHitAlong(props.surface, { x: ray.origin[0], y: ray.origin[1], z: ray.origin[2] }, { x: ray.direction[0], y: ray.direction[1], z: ray.direction[2] })
+  }
+  let brushAt = (e: ScenePointerEvent) => {
+    let hit = brushHit(e.x, e.y)
+    setCursor(hit)
+    if (hit !== undefined && hit.part >= 0) props.onPaint(hit)
+  }
+  let endStroke = () => {
+    stroke = undefined
+    strokePainted = props.onPaintEnd()
+  }
 
   let showArrows = createMemo(() => props.tool === "move" && props.part !== undefined)
   // Turning a sphere, an ellipsoid or a round box changes nothing, so they get no rings.
@@ -277,23 +334,48 @@ export function Viewport(props: ViewportProps) {
       clearColor={[0x11 / 255, 0x11 / 255, 0x14 / 255, 1]}
       ref={s => (scene = s)}
       onPointerDown={e => {
+        if (props.tool === "paint") {
+          // One stroke at a time; a second finger is ignored, as upstream's is.
+          if (stroke !== undefined) return
+          strokePainted = undefined
+          if (props.onPaintStart()) {
+            stroke = { pointerId: e.pointerId }
+            return
+          }
+        }
         if (!grab(e)) pointer.handlers.onPointerDown(e.native)
       }}
       onPointerMove={e => {
-        if (drag?.pointerId === e.pointerId) follow(e)
-        else pointer.handlers.onPointerMove(e.native)
+        if (stroke?.pointerId === e.pointerId) brushAt(e)
+        else if (stroke !== undefined) return
+        else if (drag?.pointerId === e.pointerId) follow(e)
+        else {
+          // The ring follows a hovering pointer too; a miss hides it.
+          if (props.tool === "paint") setCursor(brushHit(e.x, e.y))
+          pointer.handlers.onPointerMove(e.native)
+        }
       }}
       onPointerUp={e => {
-        if (drag?.pointerId === e.pointerId) release(true)
+        if (stroke?.pointerId === e.pointerId) {
+          // The lift is the stroke's last sample: a tap on the model is one dab.
+          brushAt(e)
+          endStroke()
+        } else if (stroke !== undefined) return
+        else if (drag?.pointerId === e.pointerId) release(true)
         else pointer.handlers.onPointerUp(e.native)
       }}
       onPointerCancel={e => {
-        if (drag?.pointerId === e.pointerId) release(false)
+        if (stroke?.pointerId === e.pointerId) endStroke()
+        else if (stroke !== undefined) return
+        else if (drag?.pointerId === e.pointerId) release(false)
         else pointer.handlers.onPointerCancel(e.native)
       }}
       onWheel={e => pointer.handlers.onWheel(e.native)}
       onTap={(e: SceneTapEvent) => {
-        if (props.tool !== "select" || scene === undefined) return
+        // The select tool picks; so does a paint tap that painted nothing.
+        let picking = props.tool === "select" || (props.tool === "paint" && strokePainted === false)
+        strokePainted = undefined
+        if (!picking || scene === undefined) return
         // Every hit along the ray, so a tap through the selection box still reaches the model.
         let hit = scene.pick(e.x, e.y).find(candidate => candidate.mesh === model)
         props.onPick(hit === undefined ? undefined : { x: hit.point[0], y: hit.point[1], z: hit.point[2] })
@@ -307,7 +389,7 @@ export function Viewport(props: ViewportProps) {
       <HemisphereLight sky={[0.36, 0.38, 0.44]} ground={[0.22, 0.22, 0.26]} intensity={1} />
 
       <Show when={geometry()}>
-        {g => <Mesh geometry={g()} material={props.mesh?.translucent ? glassy : solid} ref={m => (model = m)} />}
+        {g => <Mesh geometry={g()} material={props.mesh?.translucent ? (painted()?.glassy ?? glassy) : (painted()?.solid ?? solid)} ref={m => (model = m)} />}
       </Show>
 
       {/* The primitive's own extent, turned with the part, and drawn after the model so it covers the surface it marks. */}
@@ -348,6 +430,14 @@ export function Viewport(props: ViewportProps) {
             )}
           </For>
         </Group>
+      </Show>
+
+      {/* The brush's ring, laid flat on the surface and drawn through the model like the handles. */}
+      <Show when={props.tool === "paint" ? cursor() : undefined}>
+        {hit => {
+          let q = () => quatFromTo([0, 0, 0, 1], [0, 1, 0], [hit().normal.x, hit().normal.y, hit().normal.z])
+          return <Mesh geometry={brushRing} material={brushLook} position={[hit().point.x, hit().point.y, hit().point.z]} quaternion={q()} scale={Math.max(props.brushRadius, 1e-4)} renderOrder={11} />
+        }}
       </Show>
 
       <Show when={showRings()}>

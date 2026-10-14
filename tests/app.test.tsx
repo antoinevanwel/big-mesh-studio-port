@@ -145,3 +145,33 @@ test("dragging a ring turns the part, as one undo step", async app => {
   await rest(app)
   expect(root.findAll({ text: "0.0" }).length).toBe(3)
 })
+
+test("a paint stroke lands on the model, as one undo step, and survives a save", async app => {
+  let root = await start(app)
+  // The first mouse move turns the components' policy from touch to
+  // desktop, which narrows the buttons and reflows the tool row; let that
+  // happen before tapping Paint (wrapped onto the next row until then).
+  await app.input([{ type: "pointer", action: "move", x: 640, y: 700 }])
+  await rest(app)
+  await app.tap(root.find({ text: "Paint" }))
+  await rest(app)
+  // Across the capsule's middle, which stands at the window's centre.
+  await app.drag({ x: 600, y: 420 }, { x: 680, y: 430 }, { durationMs: 200 })
+  await rest(app)
+  // The brush panel sits below the shape panel, scrolled out of this window.
+  let readout = root.find({ text: /paint texels a world unit · \d+ dabs$/ })
+  expect(readout.exists).toBe(true)
+  let dabs = Number(/(\d+) dabs$/.exec(readout.text!)![1])
+  expect(dabs).toBeGreaterThan(1)
+  await app.tap(root.find({ text: "Files" }))
+  await rest(app)
+  await app.tap(root.find({ text: "Save" }))
+  await rest(app)
+  let saved = await new ZipReader(await file("models/model.sdfmod").bytes()).textOf("manifest.json")
+  expect(JSON.parse(saved!).paint).toEqual({ dabs, strokes: 1 })
+  await app.tap(root.find({ text: "Close" }))
+  await rest(app)
+  await app.tap(root.find({ text: "Undo" }))
+  await rest(app)
+  expect(root.find({ text: /· 0 dabs$/ }).exists).toBe(true)
+})

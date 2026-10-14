@@ -11,7 +11,7 @@ it, and where each upstream file landed here.
 ```
 repo:      https://github.com/big-mesh-studios/big-mesh-studios
 branch:    main
-synced-to: c38347302ba799599a4096b745dfe1908aef5801
+synced-to: fa5c16e31e251c2416ea2fd746498c70b51a8663
 paths:     apps/sdf-modeller packages/csg packages/meshing packages/sdf packages/picking packages/maths packages/ui packages/utils docs/adr
 ```
 
@@ -88,7 +88,13 @@ became tests/*.test.ts(x).
 | apps/sdf-modeller/src/view/viewport.ts, model-view.ts, model-material.ts, ghost.ts, move-handles.ts | src/view/viewport.tsx |
 | apps/sdf-modeller/src/view/move-handle.ts | src/view/move-handle.ts |
 | apps/sdf-modeller/src/view/rotate-handle.ts, rotate-handles.ts | src/view/rotate-handle.ts, src/view/viewport.tsx (the rings) |
-| apps/sdf-modeller/src/view/selection-box.ts, pick-part.ts | src/view/viewport.tsx (the box; picking is native) |
+| apps/sdf-modeller/src/view/selection-box.ts, pick-part.ts | src/view/viewport.tsx (the box; picking is native), src/model/part.ts (`pointInPartFrame`, `distanceToPart`) |
+| apps/sdf-modeller/src/unwrapping/paint-journal.ts, paint-field.ts, paint-rasterise.ts, paint-brush.ts, paint-file.ts | src/paint/journal.ts, field.ts, rasterise.ts, brush.ts, file.ts |
+| apps/sdf-modeller/src/view/field-hit.ts, packages/picking (`pickAlong`, the trace it calls) | src/view/field-hit.ts |
+| apps/sdf-modeller/src/view/model-material.ts (the field path) | src/view/paint-material.ts (a `phong` lit program with a `surface` function) |
+| apps/sdf-modeller/src/view/paint-cursor.ts | src/view/viewport.tsx (the brush ring) |
+| apps/sdf-modeller/src/ui/brush-panel.tsx | src/ui/brush-panel.tsx (the colour picker inline, as the transform panel's is, not in a popover) |
+| apps/sdf-modeller/src/app.tsx (paint: journal, field, stroke, undo, load) | src/routes/modeller.tsx; the right column holds the shape panel above the brush panel in one scroll |
 | apps/sdf-modeller/src/*.module.css | src/theme.ts and inline layout |
 | packages/csg/src/{operations,field,base-field}.ts | src/model/field.ts (no BVH: a linear scan with box reach) |
 | packages/csg/src/serialise.ts | src/file/serialise.ts |
@@ -128,6 +134,7 @@ covers them.
 | The selection box follows a move or rotate drag | Port | Upstream's stays where the part started until release; following the ghost shows where the part will land. Revert: draw the box at `props.part` instead of `pose()` in viewport.tsx. |
 | A rotate ring's facing (which way a drag round it turns) is measured from the eye to the part's origin | Port | Upstream compares the ring's axis with the camera's view direction. Under perspective the eye-to-part direction is the one the ring is actually seen along; the two differ only for a ring seen nearly edge-on away from the screen's centre. Revert: test the axis against `target - position` of the camera in `ringsOnScreen` (viewport.tsx). |
 | Meshing for a print reports progress through generators: the sampler and marching cubes yield once per layer of blocks, and the export is an async-generator isolate export streaming `{ progress }` then `{ bytes }` | SolidRT | Upstream's mesher calls a progress callback per grid plane and its web worker posts it out; an isolate has no channel out of synchronous work (SOLIDRT-FEEDBACK.md, "An isolate cannot report progress from synchronous work"). Revert: plain loops with a progress callback, posted through the channel once there is one; drop `finish()`, `*Steps` and the stream in mesher.ts. |
+| Clear paint works: it enables while there is paint, and undoing it puts the strokes back | Port | Upstream's button reads the journal untracked (`hasPaint={paintJournal.count > 0}`), so it is disabled at mount and never enables; and its undo entry has `apply` and `invert` swapped, so an undo clears the already-empty journal and the paint stays gone. The port enables it on the dab count and records the clear in the store's convention (invert puts the strokes back, one undo step each). Revert: none wanted; offer the fix upstream. |
 | The export test waits on meshes in an isolate of its own (`restUntil` in tests/app.test.tsx) | SolidRT | settle() does not wait for an isolate stream (SOLIDRT-FEEDBACK.md, "`settle()` does not wait for an isolate stream"). Test-only. Revert: `rest(app)` once settle() counts an open stream as in flight. |
 
 ## Ideas beyond upstream
@@ -167,13 +174,32 @@ offered upstream, or taken here if a measurement shows it is needed.
   code (upstream's broad pass differs), so it needs no Deviations row,
   only a measurement and a test that the meshes come out identical.
 
+- **Paint follows its part, and keeps it through a reorder.** Re-rasterising
+  the journal when a rebuild lands (the field is a pure function of the
+  journal and the parts) would make paint move with a moved part, which
+  upstream's plan intends ("Moving a part re-rasterises") but does not do.
+  A dab names its part by index; remapping the journal's indices on a
+  reorder or delete (and back on undo) would keep paint on its part
+  without changing paint.bin.
+- **Per-brick uploads.** SolidRT's `uploadTexture(id, data, box)` writes
+  one brick of a 3D texture, so a stroke could send only the slots
+  `PaintField.takeDirty()` names (and their indirection cells) instead of
+  the whole 7 MB pool on every move; upstream's plan wanted this (M1) and
+  its renderer could not.
+- **Seamless bricks.** A brick's gutter holds a copy of its own edge
+  voxels, so trilinear filtering cannot blend across a brick edge and a
+  soft stroke shows a step every 8 voxels. Writing the neighbour's edge
+  voxels into the gutter (at the cost upstream's plan weighed) would
+  remove it. The material's slot address adds 1.5 where 1.0 would put a
+  voxel's value at its own centre: half a voxel of offset.
+
 ## Ledger
 
 Every tracked upstream commit after the original base, in upstream order.
 Status: `pending` (to port), `ported`, `covered` (the port already does
 this its own way), `skipped` (not wanted, or web-only).
 
-Triaged 2026-10-14 against upstream `825d887`.
+Triaged 2026-10-14 against upstream `f353fa1` (its last commit touches no tracked path).
 
 | Commit | Upstream | Status | For the port |
 | --- | --- | --- | --- |
@@ -189,51 +215,81 @@ Triaged 2026-10-14 against upstream `825d887`.
 | 81eb709 | reorder parts | ported | ▲/▼ per row, dimmed at the ends; `moveUp`/`moveDown` in the store, one undo step each. |
 | 17d7036 | +/− on number fields | ported | −/+ beside every NumberField that has a `step`: 0.05 position, the primitive's own step for dimensions, 0.01 softness, 1 degree, 1 for print height and filaments. Each press is one undo step. The field asks for a plain keyboard, as upstream does (the runtime does not say whether its `number` hint has a minus key). |
 | c383473 | parts tab scroll fix | skipped | CSS; the port's ScrollView nesting has no such bug. |
-| f77d6f4 | brush painting | pending | Painting, with c002e1a and a4f124b, which replaced this commit's UV-atlas design. Port the final design only. |
-| 111a929 | paint saved in the draft | pending | Painting. |
-| 20dfc5b | UI layout fix | pending | With painting: the brush panel stacks under the shape panel in one right column. |
+| f77d6f4 | brush painting | ported | As its final design (c002e1a, a4f124b): the Paint tool, the brush panel, the ring, strokes as undo steps. Its UV-atlas half is dead upstream and not ported. |
+| 111a929 | paint saved in the draft | ported | A stroke and a clear arm the draft. |
+| 20dfc5b | UI layout fix | ported | The brush panel under the shape panel in the right column; a Paint tab in the compact layout. |
 | 49bad35 | marching cubes speed | ported | The 8 constant corner strides in marching-cubes.ts. The BVH and allocation changes do not apply (no BVH here). Output identical. |
 | 1b1d66a | marching cubes broad pass | covered | src/mesh/grid.ts has its own block cull. Upstream widens its reach by the widest softness; the port needs no margin: a smooth min/max moves along a convex mix of its inputs' gradients, so the folded field stays 1-Lipschitz at any softness (the earlier note here called this a bug; a random search found no culled crossing). tests/mesh.test.ts guards it. |
 | c6ca533 | camera controls fix | covered | OrbitCamera already zooms by wheel and pinch and reaches under the model. |
-| fa2fe19 | Chrome on Windows rendering fix | skipped | Web-only, except its paint tint/replace formula, which a painting port should take instead of f77d6f4's. |
-| c002e1a | resolution-independent painting | pending | Painting: the final design. See below. |
+| fa2fe19 | Chrome on Windows rendering fix | skipped | Web-only. Its paint tint/replace formula is in the port (src/view/paint-material.ts). |
+| c002e1a | resolution-independent painting | ported | The journal, the sparse brick field, the rasteriser, the brush, the sphere-traced brush hit, the two `sampler3D`s in the material. See "Painting, as ported" below. |
 | eafdd77 | prettier | skipped | Formatting. |
-| a4f124b | paint appearance, paint survives a save | pending | Painting: the file format below. |
+| a4f124b | paint appearance, paint survives a save | ported | Stroke-wise compositing, the widened falloff, the 1.5-voxel shell, the unpremultiply in the material, `paint.bin` and the manifest's `paint` field, the journal adopted and rasterised on open. |
 | f610c04 | surface nets broad pass (spacescape) | covered | The port's grid.ts cull serves both meshers; lanes and warps are spacescape-only. |
 | 7265fb3 | eye dropper | skipped | The browser's EyeDropper API has no SolidRT equivalent. Could become an in-app "take a part's colour" tool. |
 | 4879bc6 | rmsl 1.16.0 | skipped | The port does not use rmsl. |
 | cde5493 | flat planet (spacescape, ADR 0050) | skipped | Spacescape-only. |
 | 25eb290 | Windows-only fix | skipped | A WebGL alpha issue; the port packs opacity into that byte on purpose. |
 | 825d887 | prettier | skipped | Formatting. |
+| fa5c16e | spacescape move and rotate handles | skipped | Spacescape-only; it touches docs/adr (ADR 0001's table, ADR 0051) to say the level editor took this app's handles. |
 
-### Painting, for whoever ports it
+### Painting, as ported
 
-- Final design (c002e1a, a4f124b): paint is a journal of 40-byte dabs in
-  part-local space (paint-journal.ts), rasterised into a sparse 3D brick
-  field of 0.05-unit voxels (paint-field.ts, paint-rasterise.ts), sampled
-  by world position in the material. No UV unwrap; independent of mesh
-  resolution. Start from apps/sdf-modeller/docs/resolution-independent-paint-plan.md.
-- Dead or superseded upstream, do not port: the xatlas unwrap, bake and
+- The design (c002e1a, a4f124b): paint is a journal of 40-byte dabs in
+  part-local space (src/paint/journal.ts), rasterised into a sparse field
+  of 0.05-unit voxels in 8³ bricks (src/paint/field.ts, rasterise.ts),
+  sampled by world position in the model's material. The brush traces the
+  model's SDF, not its mesh. Upstream's
+  apps/sdf-modeller/docs/resolution-independent-paint-plan.md is the
+  design record.
+- SolidRT: 0.0.76 has 3D textures (`createTexture3D`, `uploadTexture` with
+  a box), so the pool and the indirection grid are two `sampler3D`s, as
+  upstream's are; the 2D-atlas workaround planned for 0.0.75 was not needed.
+  Like upstream, the whole of both volumes is uploaded whenever paint
+  changes (see Ideas for per-brick uploads).
+- File format: the manifest's optional `paint: { dabs, strokes }` and a
+  `paint.bin` entry (v1); PROJECT_VERSION and model.bin are unchanged. An
+  unpainted model writes the same two entries as before. Upstream's atlas
+  files (`texture`, `texture.png`, `texture.bin`), written only between
+  f77d6f4 and c002e1a, open without their picture.
+- Not ported, dead or superseded upstream: the xatlas unwrap, bake and
   atlas files (unwrap*.ts, bake.ts, paint-surface.ts, reference-file.ts,
   mesh/uv-transfer.ts, mesh/triangle-bvh.ts), view/brush-hit.ts,
-  unwrapping/stroke-recorder.ts, unwrapping/paint-cull.ts.
-- SolidRT gap: flux:gpu has no 3D textures (SOLIDRT-FEEDBACK.md, "No 3D
-  textures (or texture arrays) in flux:gpu"). Plan: the brick pool as slices
-  in a 2D atlas (two bilinear taps, blended), the indirection grid as a 2D
-  texture, in a `phong` `surface` function; per-brick rect uploads.
-- File format: the manifest gains optional `paint: { dabs, strokes }`, the
-  zip gains `paint.bin` (v1). PROJECT_VERSION and model.bin are unchanged.
-  Until this is ported, the port opens a painted upstream file and silently
-  drops the paint, and re-saving it loses the paint for good.
-- Upstream bugs to fix while porting: paint does not follow a moved part
-  until the next replay, and a dab names its part by list index, so a
-  reorder or delete mis-assigns it.
+  unwrapping/stroke-recorder.ts, unwrapping/paint-cull.ts (tested upstream
+  but never called).
+- Upstream behaviour the port keeps, as it is:
+  - Paint does not follow a moved part until the next replay (an undo or
+    redo of paint, or opening the file), and a dab names its part by list
+    index, so a reorder or a delete re-assigns it. See Ideas.
+  - The field is sized to the model at the first stroke (its bounds plus
+    4 units, a cube); a part moved past it loses its paint there.
+  - Tint and Replace: the radios are disabled (upstream enables them only
+    over a baked atlas, which nothing makes now), and the shader's
+    `mix(replacing, tinting, blend)` at the blend of 0 they show as Tint
+    replaces the part's colour. The blend is not saved.
+  - Visible seams every 8 voxels in a soft stroke: a brick's gutter
+    copies its own edge voxels, not its neighbour's, so filtering stops
+    at each brick edge. See Ideas.
 
 ## History
 
 How close the port has been to upstream over time, newest first. One
 entry per batch of porting work; the ledger holds what each upstream
 commit means, so an entry names commits by hash only.
+
+### 2026-10-14: painting, SolidRT 0.0.76
+
+- Pin `c383473` → `fa5c16e`. Nothing pending.
+- Ported: f77d6f4, 111a929, 20dfc5b, c002e1a, a4f124b (painting, as
+  their final design). Skipped: fa5c16e.
+- SolidRT 0.0.75 → 0.0.76, which added 3D textures: the paint field is
+  two `sampler3D`s as upstream's is, with no workaround.
+- Deviations added: Clear paint enables and its undo restores the paint
+  (port; upstream's does neither).
+- Ideas added: paint following its part through moves and reorders,
+  per-brick uploads, seamless bricks. The two upstream paint bugs the
+  earlier note said to fix while porting were kept as upstream has them
+  and moved to Ideas, by the rule that the port does what upstream does.
 
 ### 2026-10-14: everything before painting
 

@@ -3,7 +3,7 @@
 // of what the model is once a Subtract is in the list. No hierarchy, no
 // pivots, no motions (upstream ADR 0027).
 
-import { primitiveHalfExtents, type OperationShape } from "./primitives"
+import { primitiveHalfExtents, sdShape, type OperationShape } from "./primitives"
 import type { Quat, Rgb8, Vec3 } from "./types"
 
 export type Combine = "Add" | "Subtract"
@@ -85,6 +85,27 @@ export const axisAngle = (x: number, y: number, z: number, radians: number): Qua
   if (length === 0) return IDENTITY
   let s = Math.sin(radians / 2) / length
   return { x: x * s, y: y * s, z: z * s, w: Math.cos(radians / 2) }
+}
+
+/** The opposite turn. */
+export const conjugate = (q: Quat): Quat => ({ x: -q.x, y: -q.y, z: -q.z, w: q.w })
+
+/** `v` turned by `q`. */
+export const rotate = (v: Vec3, q: Quat): Vec3 => {
+  let tx = 2 * (q.y * v.z - q.z * v.y)
+  let ty = 2 * (q.z * v.x - q.x * v.z)
+  let tz = 2 * (q.x * v.y - q.y * v.x)
+  return { x: v.x + q.w * tx + (q.y * tz - q.z * ty), y: v.y + q.w * ty + (q.z * tx - q.x * tz), z: v.z + q.w * tz + (q.x * ty - q.y * tx) }
+}
+
+/** A world point in a part's own frame: the frame its shape measures in. */
+export const pointInPartFrame = (part: Part, point: Vec3): Vec3 =>
+  rotate({ x: point.x - part.origin.x, y: point.y - part.origin.y, z: point.z - part.origin.z }, conjugate(part.orientation))
+
+/** How far a world point is from a part's own surface, whatever its boolean. */
+export const distanceToPart = (part: Part, point: Vec3): number => {
+  let own = pointInPartFrame(part, point)
+  return sdShape(part.shape, own.x, own.y, own.z)
 }
 
 /** The largest distance from a part's origin to any point of it, whatever its rotation. */
