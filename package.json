@@ -4,8 +4,8 @@
   "private": true,
   "license": "MIT",
   "solidrt": {
-    "appId": null,
-    "displayName": null,
+    "appId": "net.zwiep.bms",
+    "displayName": "SDF Modeller",
     "icon": null,
     "iconBackground": null,
     "capabilities": {
