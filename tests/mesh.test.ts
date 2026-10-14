@@ -1,7 +1,9 @@
 import { test, expect } from "flux:test"
 import { budgetFor, meshParts } from "../src/mesh/mesh-model"
 import { newModel, placedPart, fromEuler } from "../src/model/part"
-import { packPaint } from "../src/model/field"
+import { Field, packPaint } from "../src/model/field"
+import { BLOCK, gridPoints, sampleGrid } from "../src/mesh/grid"
+import type { Part } from "../src/model/part"
 
 const capsuleVolume = Math.PI * 0.7 * 0.7 * 2.2 + (4 / 3) * Math.PI * 0.7 ** 3
 
@@ -90,4 +92,51 @@ test("every primitive meshes closed", () => {
     let result = meshParts([placedPart(shape.type, shape, { x: 0, y: 0, z: 0 })], budgetFor(0.125))!
     expect({ type: shape.type, open: result.report.boundaryEdges, positive: result.report.volume > 0 }).toEqual({ type: shape.type, open: 0, positive: true })
   }
+})
+
+// Every cell the exact field crosses must sit in a block the cull kept, or
+// the mesh has a hole there. Soft blends are where that can fail: a blend
+// dents the field by up to its softness, so a block's centre value can claim
+// more distance from the surface than there is.
+const crossedCellsCulled = (parts: Part[], sampleSize: number): number => {
+  let field = new Field(parts)
+  let samples = 40
+  let origin: [number, number, number] = [-samples * sampleSize * 0.5, -samples * sampleSize * 0.5, -samples * sampleSize * 0.5]
+  let grid = sampleGrid(field, origin, samples, sampleSize)
+  let n = gridPoints(samples)
+  let exact = new Float32Array(n * n * n)
+  for (let z = 0; z < n; z++)
+    for (let y = 0; y < n; y++)
+      for (let x = 0; x < n; x++) exact[(z * n + y) * n + x] = field.distance(origin[0] + (x - 1) * sampleSize, origin[1] + (y - 1) * sampleSize, origin[2] + (z - 1) * sampleSize)
+  let missed = 0
+  for (let z = 0; z < n - 1; z++)
+    for (let y = 0; y < n - 1; y++)
+      for (let x = 0; x < n - 1; x++) {
+        let inside = 0
+        for (let c = 0; c < 8; c++) if (exact[((z + (c >> 2)) * n + y + ((c >> 1) & 1)) * n + x + (c & 1)]! < 0) inside++
+        if (inside === 0 || inside === 8) continue
+        let b = (Math.floor(z / BLOCK) * grid.blocks + Math.floor(y / BLOCK)) * grid.blocks + Math.floor(x / BLOCK)
+        if (grid.active[b] === 0) missed++
+      }
+  return missed
+}
+
+test("the block cull keeps every block a soft blend's surface crosses", () => {
+  let soft = 0.25
+  let models: Part[][] = [
+    [
+      placedPart("a", { type: "Sphere", radius: 0.5 }, { x: -0.45, y: 0, z: 0 }),
+      placedPart("b", { type: "Sphere", radius: 0.5 }, { x: 0.45, y: 0, z: 0 }, { softness: soft }),
+    ],
+    [
+      placedPart("a", { type: "Box", len: { x: 1.4, y: 1.4, z: 1.4 } }, { x: 0, y: 0, z: 0 }),
+      placedPart("b", { type: "Sphere", radius: 0.6 }, { x: 0.7, y: 0.7, z: 0 }, { combine: "Subtract", softness: soft }),
+    ],
+    [
+      placedPart("a", { type: "Capsule", len: 1.4, radius: 0.25 }, { x: 0, y: 0, z: 0 }),
+      placedPart("b", { type: "Torus", majorRadius: 0.6, minorRadius: 0.12 }, { x: 0, y: 0.1, z: 0 }, { softness: soft }),
+      placedPart("c", { type: "Sphere", radius: 0.3 }, { x: 0.3, y: 0.5, z: 0.2 }, { softness: soft }),
+    ],
+  ]
+  for (let parts of models) for (let size of [0.05, 0.08, 0.12]) expect(crossedCellsCulled(parts, size)).toBe(0)
 })

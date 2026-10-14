@@ -2,7 +2,7 @@ import { test, expect } from "flux:test"
 import { readProject, writeProject } from "../src/file/project"
 import { deserialiseOperations, serialiseOperations } from "../src/file/serialise"
 import { writeZip, ZipReader } from "../src/file/zip"
-import { exportThreeMf } from "../src/print/print"
+import { describePrintEstimate, exportThreeMf, exportThreeMfSteps, PRINT_MAX_SAMPLES_PER_AXIS, printEstimate } from "../src/print/print"
 import { fromEuler, placedPart, type Part } from "../src/model/part"
 
 const bytesOf = (base64: string): Uint8Array => Uint8Array.from(atob(base64), c => c.charCodeAt(0))
@@ -104,4 +104,40 @@ test("a print is a closed solid of the asked height with one slot per corner", a
 
 test("an empty model is refused for printing", async () => {
   await expect(exportThreeMf([], { heightMm: 80, maxColours: 4, title: "x" })).rejects.toThrow("nothing in it to print")
+})
+
+const ball = (): Part[] => [placedPart("ball", { type: "Sphere", radius: 0.4 }, { x: 0, y: 0, z: 0 })]
+const trianglesIn = async (bytes: Uint8Array): Promise<number> => [...(await new ZipReader(bytes).textOf("3D/3dmodel.model"))!.matchAll(/<triangle /g)].length
+
+test("a finer print resolution makes a finer print, and one outside the range is refused", async () => {
+  let coarse = await trianglesIn(await exportThreeMf(ball(), { heightMm: 40, maxColours: 1, title: "ball" }))
+  let fine = await trianglesIn(await exportThreeMf(ball(), { heightMm: 40, maxColours: 1, title: "ball", voxelSize: 0.03125 }))
+  expect(fine).toBeGreaterThan(coarse * 3)
+  await expect(exportThreeMf(ball(), { heightMm: 40, maxColours: 1, title: "ball", voxelSize: 0.125 })).rejects.toThrow("a print meshes between")
+  await expect(exportThreeMf(ball(), { heightMm: 40, maxColours: 1, title: "ball", voxelSize: 0.001 })).rejects.toThrow("a print meshes between")
+})
+
+test("an export streams rising progress, then the file", async () => {
+  let progress: number[] = []
+  let bytes: Uint8Array | undefined
+  for await (let step of exportThreeMfSteps(ball(), { heightMm: 40, maxColours: 1, title: "ball" })) {
+    if ("bytes" in step) bytes = step.bytes
+    else progress.push(step.progress)
+  }
+  expect(progress.length).toBeGreaterThan(10)
+  expect(progress.every((value, i) => i === 0 || value >= progress[i - 1]!)).toBe(true)
+  expect(progress[progress.length - 1]).toBe(1)
+  expect(bytes !== undefined && bytes.length > 0).toBe(true)
+})
+
+test("the print estimate says what a resolution costs, and when the cap holds it back", () => {
+  let fine = printEstimate(ball(), 0.015625)!
+  let coarse = printEstimate(ball(), 0.0625)!
+  expect(fine.samples).toBeGreaterThan(coarse.samples)
+  expect(fine.seconds).toBeGreaterThan(coarse.seconds)
+  expect(/^\d+ samples across · about \d+k? triangles · about [\d.]+ s$/.test(describePrintEstimate(coarse))).toBe(true)
+  let big = printEstimate([placedPart("slab", { type: "Box", len: { x: 20, y: 20, z: 20 } }, { x: 0, y: 0, z: 0 })], 0.015625)!
+  expect(big.samples).toBe(PRINT_MAX_SAMPLES_PER_AXIS)
+  expect(big.capped).toBe(true)
+  expect(describePrintEstimate(big)).toContain(`capped at ${PRINT_MAX_SAMPLES_PER_AXIS}`)
 })

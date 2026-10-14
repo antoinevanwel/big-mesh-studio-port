@@ -3,11 +3,11 @@
 // report. Ported from big-mesh-studios' packages/meshing model-mesh.ts.
 
 import { Field, fieldBounds } from "../model/field"
-import type { Part } from "../model/part"
+import { IDENTITY, type Part } from "../model/part"
 import { MeshBuilder, type MeshData } from "./builder"
 import { splitColourSeams } from "./colour-seams"
-import { sampleGrid } from "./grid"
-import { marchingCubes } from "./marching-cubes"
+import { finish, sampleGridSteps, type Grid } from "./grid"
+import { marchingCubesSteps } from "./marching-cubes"
 import { fillNormals } from "./normals"
 import { reportMesh, type MeshReport } from "./report"
 import { surfaceNets } from "./surface-nets"
@@ -90,13 +90,36 @@ export interface MeshResult {
   readonly report: MeshReport
 }
 
-export const meshParts = (parts: readonly Part[], budget: MeshBudget, mode: MeshMode = DEFAULT_MESH_MODE): MeshResult | undefined => {
+export const meshParts = (parts: readonly Part[], budget: MeshBudget, mode: MeshMode = DEFAULT_MESH_MODE): MeshResult | undefined =>
+  finish(meshPartsSteps(parts, budget, mode))
+
+// How a rebuild's progress splits between sampling and meshing; the
+// normals, colours and seams after them take the rest.
+// Measured on a 243³ print of the default capsule.
+const SAMPLING_SHARE = 0.7
+const MESHING_SHARE = 0.18
+
+/**
+ * `meshParts`, yielding its progress (0..1) after each layer of blocks, for
+ * a print export to report from the mesher isolate (see `sampleGridSteps`
+ * in grid.ts for why this is a generator rather than a callback).
+ */
+export function* meshPartsSteps(parts: readonly Part[], budget: MeshBudget, mode: MeshMode = DEFAULT_MESH_MODE): Generator<number, MeshResult | undefined> {
   let region = meshRegion(parts, budget)
   if (region === undefined) return undefined
   let field = new Field(parts)
-  let grid = sampleGrid(field, region.origin, region.samples, region.sampleSize)
+  let sampling = sampleGridSteps(field, region.origin, region.samples, region.sampleSize)
+  let grid: Grid
+  for (;;) {
+    let step = sampling.next()
+    if (step.done === true) {
+      grid = step.value
+      break
+    }
+    yield SAMPLING_SHARE * step.value
+  }
   let builder = new MeshBuilder()
-  if (mode === "marching-cubes") marchingCubes(grid, builder)
+  if (mode === "marching-cubes") for (let done of marchingCubesSteps(grid, builder)) yield SAMPLING_SHARE + MESHING_SHARE * done
   else surfaceNets(grid, builder)
   let built = builder.finish()
   fillNormals(built, field, region.sampleSize)
@@ -108,9 +131,11 @@ export const meshParts = (parts: readonly Part[], budget: MeshBudget, mode: Mesh
 }
 
 /**
- * One part on its own, at its own origin, for a drag ghost: forced to a
- * hard-edged union, because a lone cut folded against nothing is nothing,
- * and the ghost shows the shape that is moving rather than its effect.
+ * One part on its own, at its own origin and unturned, for a drag ghost:
+ * the view places and turns it, so a rotate drag turns the node rather than
+ * re-meshing. Forced to a hard-edged union, because a lone cut folded
+ * against nothing is nothing, and the ghost shows the shape that is moving
+ * rather than its effect.
  */
 export const partMesh = (part: Part, budget: MeshBudget): MeshResult | undefined =>
-  meshParts([{ ...part, origin: { x: 0, y: 0, z: 0 }, combine: "Add", softness: 0 }], budget, "surface-nets")
+  meshParts([{ ...part, origin: { x: 0, y: 0, z: 0 }, orientation: IDENTITY, combine: "Add", softness: 0 }], budget, "surface-nets")

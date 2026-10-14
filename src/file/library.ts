@@ -1,7 +1,7 @@
 // Where documents live: the app's own storage folder. There is no system
-// open or save dialog here (FEEDBACK.md), so projects are kept in models/
-// under storage and listed in the Files dialog, the autosaved draft is one
-// file beside them, and prints are written to exports/.
+// open or save dialog here (SOLIDRT-FEEDBACK.md), so projects are kept in
+// models/ under storage and listed in the Files dialog, the autosaved draft
+// is one file beside them, and prints are written to exports/.
 
 import { dir, file, realpath } from "flux:fs"
 import { PROJECT_EXTENSION } from "./project"

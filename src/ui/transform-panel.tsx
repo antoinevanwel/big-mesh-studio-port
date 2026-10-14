@@ -38,15 +38,15 @@ export function TransformPanel(props: { part: Part; store: ModelStore; palette: 
 
       <Heading>Position</Heading>
       <For each={["x", "y", "z"] as const}>
-        {axis => <NumberField label={axis} value={props.part.origin[axis]} onCommit={value => change({ origin: { ...props.part.origin, [axis]: value } })} />}
+        {axis => <NumberField label={axis} step={0.05} value={props.part.origin[axis]} onCommit={value => change({ origin: { ...props.part.origin, [axis]: value } })} />}
       </For>
 
       <Heading>Dimensions</Heading>
       <For each={dimensionGroups(props.part.shape)}>
         {group => (
-          <Show when={group.fields.length > 1} fallback={<NumberField label={group.label} value={group.fields[0]!.value} onCommit={value => setDimension(group.fields[0]!, value)} />}>
+          <Show when={group.fields.length > 1} fallback={<NumberField label={group.label} step={group.fields[0]!.step} value={group.fields[0]!.value} onCommit={value => setDimension(group.fields[0]!, value)} />}>
             <Text variant="caption" muted>{group.label}</Text>
-            <For each={group.fields}>{field => <NumberField label={field.label} value={field.value} onCommit={value => setDimension(field, value)} />}</For>
+            <For each={group.fields}>{field => <NumberField label={field.label} step={field.step} value={field.value} onCommit={value => setDimension(field, value)} />}</For>
           </Show>
         )}
       </For>
@@ -83,7 +83,7 @@ export function TransformPanel(props: { part: Part; store: ModelStore; palette: 
         value={props.part.combine}
         onChange={combine => change({ combine })}
       />
-      <NumberField label="soft" value={props.part.softness} onCommit={value => change({ softness: Math.max(0, Math.min(MAX_SOFTNESS, value)) })} />
+      <NumberField label="soft" step={0.01} value={props.part.softness} onCommit={value => change({ softness: Math.max(0, Math.min(MAX_SOFTNESS, value)) })} />
       <Text variant="caption" muted>
         {props.part.softness <= 0 ? "hard edge" : `soft ${props.part.combine === "Add" ? "union" : "difference"}`}
       </Text>
@@ -94,6 +94,7 @@ export function TransformPanel(props: { part: Part; store: ModelStore; palette: 
           {axis => (
             <NumberField
               label={axis}
+              step={1}
               digits={1}
               value={angles()[axis]}
               onCommit={value => {

@@ -38,7 +38,21 @@ export interface ModelStore {
   /** An id no part holds and none this session was handed. */
   readonly nextId: () => string
   readonly add: (part: Part) => boolean
+  /**
+   * Copies a part under a fresh id, in the same place, and selects the
+   * copy. Returns the copy's id, or undefined when there was nothing to
+   * copy or no room for it.
+   */
+  readonly duplicate: (id: string) => string | undefined
   readonly remove: (id: string) => boolean
+  /**
+   * Moves a part one place towards the front of the list. The parts fold in
+   * list order, so this is an edit of the model like any other. Refused (no
+   * history entry) for the first part or an unknown id.
+   */
+  readonly moveUp: (id: string) => boolean
+  /** Moves a part one place towards the back of the list. See `moveUp`. */
+  readonly moveDown: (id: string) => boolean
   /**
    * Edits a part. Changes passing the same `gesture` (any value, one per
    * drag) fold into one history entry, so a colour dragged across the
@@ -85,7 +99,42 @@ export const createModelStore = (initial: readonly Part[] = []): ModelStore => {
   }
   let patch = (id: string, fields: PartChange) => write(model.map(part => (part.id === id ? { ...part, ...fields } : part)))
 
-  return {
+  // Puts a part at the end of the list and selects it, as one undo step.
+  let insert = (part: Part, label: string): boolean => {
+    if (model.length >= MAX_PARTS || model.some(existing => existing.id === part.id)) return false
+    let apply = () => {
+      write([...model, part])
+      choose(part.id)
+    }
+    apply()
+    record({
+      label,
+      apply,
+      invert: () => {
+        write(model.filter(existing => existing.id !== part.id))
+        choose(undefined)
+      },
+    })
+    return true
+  }
+
+  // Lifts a part out of the list and drops it at `to`. Undo and redo run in
+  // stack order, so the old index is still the right one to put it back at.
+  let reorder = (id: string, offset: number): boolean => {
+    let from = model.findIndex(part => part.id === id)
+    let to = from + offset
+    if (from < 0 || to < 0 || to >= model.length) return false
+    let move = (source: number, destination: number) => {
+      let next = [...model]
+      next.splice(destination, 0, next.splice(source, 1)[0]!)
+      write(next)
+    }
+    move(from, to)
+    record({ label: `move ${id}`, apply: () => move(from, to), invert: () => move(to, from) })
+    return true
+  }
+
+  let store: ModelStore = {
     parts,
     selected,
     canUndo,
@@ -100,22 +149,14 @@ export const createModelStore = (initial: readonly Part[] = []): ModelStore => {
       return candidate
     },
 
-    add: part => {
-      if (model.length >= MAX_PARTS || model.some(existing => existing.id === part.id)) return false
-      let apply = () => {
-        write([...model, part])
-        choose(part.id)
-      }
-      apply()
-      record({
-        label: `add ${part.id}`,
-        apply,
-        invert: () => {
-          write(model.filter(existing => existing.id !== part.id))
-          choose(undefined)
-        },
-      })
-      return true
+    add: part => insert(part, `add ${part.id}`),
+
+    duplicate: id => {
+      let existing = model.find(part => part.id === id)
+      if (existing === undefined) return undefined
+      // The nested objects are shared: nothing writes through a part.
+      let copy: Part = { ...existing, id: store.nextId() }
+      return insert(copy, `duplicate ${id}`) ? copy.id : undefined
     },
 
     remove: id => {
@@ -140,6 +181,9 @@ export const createModelStore = (initial: readonly Part[] = []): ModelStore => {
       })
       return true
     },
+
+    moveUp: id => reorder(id, -1),
+    moveDown: id => reorder(id, 1),
 
     change: (id, change, gesture) => {
       let existing = model.find(part => part.id === id)
@@ -205,4 +249,5 @@ export const createModelStore = (initial: readonly Part[] = []): ModelStore => {
       publishHistory()
     },
   }
+  return store
 }

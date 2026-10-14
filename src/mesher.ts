@@ -9,7 +9,7 @@ import type { MeshData } from "./mesh/builder"
 import { budgetFor, meshParts, partMesh, type MeshMode } from "./mesh/mesh-model"
 import type { MeshReport } from "./mesh/report"
 import type { Part } from "./model/part"
-import { exportThreeMf as writeThreeMf, type PrintOptions } from "./print/print"
+import { exportThreeMfSteps, type ExportStep, type PrintOptions } from "./print/print"
 
 /** What the viewport draws, plus what the status line says about it. */
 export interface ViewMesh {
@@ -78,7 +78,11 @@ export function ghost(part: Part): { vertices: Float32Array; indices: Uint32Arra
   return { vertices: pack(result.mesh).vertices, indices: result.mesh.indices }
 }
 
-/** The model as a 3MF print; rejects with the sentence that says why it cannot be. */
-export function exportThreeMf(parts: Part[], options: PrintOptions): Promise<Uint8Array> {
-  return writeThreeMf(parts, options)
+/**
+ * The model as a 3MF print: the meshing's progress as it goes, then the
+ * bytes. A stream because a call cannot report until it returns; a refusal
+ * throws the sentence that says why the model cannot be printed.
+ */
+export async function* exportThreeMf(parts: Part[], options: PrintOptions): AsyncGenerator<ExportStep> {
+  yield* exportThreeMfSteps(parts, options)
 }

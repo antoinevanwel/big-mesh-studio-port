@@ -11,6 +11,12 @@
 // points get the centre's value, which has the right sign and is never
 // interpolated. The surface is two-dimensional, so this turns a cubic
 // amount of sampling into roughly a square one.
+//
+// Soft blends need no extra margin here (upstream's broad pass adds the
+// widest softness): a smooth min or max moves along a convex mix of its two
+// inputs' gradients, so the folded field changes no faster than its parts
+// do, whatever the softness, and a centre value never overstates its
+// distance from the surface. tests/mesh.test.ts holds the cull to that.
 
 import type { Field } from "../model/field"
 
@@ -44,7 +50,40 @@ export const gridPoints = (samples: number): number => samples + 2
 /** The first and last grid point a block covers along one axis. */
 export const blockPoints = (block: number, points: number): [number, number] => [block * BLOCK, Math.min(block * BLOCK + BLOCK, points - 1)]
 
-export const sampleGrid = (field: Field, origin: readonly [number, number, number], samples: number, sampleSize: number): Grid => {
+/**
+ * Runs a stepwise computation to its end and returns what it returns. The
+ * meshing passes are generators so that an export in the mesher isolate
+ * can report progress between steps (see `sampleGridSteps`); everything
+ * else just wants the result.
+ */
+export const finish = <T>(steps: Generator<number, T>): T => {
+  for (;;) {
+    let step = steps.next()
+    if (step.done === true) return step.value
+  }
+}
+
+export const sampleGrid = (field: Field, origin: readonly [number, number, number], samples: number, sampleSize: number): Grid =>
+  finish(sampleGridSteps(field, origin, samples, sampleSize))
+
+// How the sampling's three walks share its progress: the block centres, the
+// exact samples of the active blocks, and the fill of the rest, which
+// writes most of the grid and takes most of the time. Measured on a 243³
+// print of the default capsule.
+const CENTRES_SHARE = 0.15
+const EXACT_SHARE = 0.2
+
+/**
+ * `sampleGrid`, yielding its progress (0..1) after each layer of blocks.
+ *
+ * A workaround for SolidRT: upstream's mesher reports progress through a
+ * callback per plane, which its web worker posts to the page as it goes. A
+ * flux isolate has no channel out of synchronous work (calls and results
+ * are copied values; only an async generator's yields stream back), so the
+ * passes are resumable instead. SOLIDRT-FEEDBACK.md, "An isolate cannot report
+ * progress from synchronous work"; UPSTREAM.md, Deviations.
+ */
+export function* sampleGridSteps(field: Field, origin: readonly [number, number, number], samples: number, sampleSize: number): Generator<number, Grid> {
   let n = gridPoints(samples)
   let blocks = Math.ceil((n - 1) / BLOCK)
   let values = new Float32Array(n * n * n).fill(NaN)
@@ -64,6 +103,7 @@ export const sampleGrid = (field: Field, origin: readonly [number, number, numbe
         active[b] = Math.abs(d) <= SAFETY * reach ? 1 : 0
       }
     }
+    yield (CENTRES_SHARE * (bz + 1)) / blocks
   }
 
   // Every point of an active block exactly, once (neighbours share points).
@@ -95,25 +135,29 @@ export const sampleGrid = (field: Field, origin: readonly [number, number, numbe
           }
         }
       }
+      yield pass === 0 ? CENTRES_SHARE + (EXACT_SHARE * (bz + 1)) / blocks : CENTRES_SHARE + EXACT_SHARE + ((1 - CENTRES_SHARE - EXACT_SHARE) * (bz + 1)) / blocks
     }
   }
   return { origin, samples, sampleSize, values, blocks, active }
 }
 
-/** Calls `visit` for every cell of every active block, once each. */
-export const forEachActiveCell = (grid: Grid, visit: (cx: number, cy: number, cz: number) => void): void => {
+/** Calls `visit` for every cell of every active block (of one z `layer` of blocks, if given), once each. */
+export const forEachActiveCell = (grid: Grid, visit: (cx: number, cy: number, cz: number) => void, layer?: number): void => {
   let cells = gridPoints(grid.samples) - 1
-  forEachActiveBlock(grid, 0, cells - 1, visit)
+  forEachActiveBlock(grid, 0, cells - 1, visit, layer)
 }
 
 /**
  * Calls `visit` for every index in [low, high] per axis that falls in an
  * active block, where an index belongs to block floor(index / BLOCK): the
- * cells of the active blocks, or the grid points that own them.
+ * cells of the active blocks, or the grid points that own them. With
+ * `layer`, only the blocks of that layer along z.
  */
-export const forEachActiveBlock = (grid: Grid, low: number, high: number, visit: (x: number, y: number, z: number) => void): void => {
+export const forEachActiveBlock = (grid: Grid, low: number, high: number, visit: (x: number, y: number, z: number) => void, layer?: number): void => {
   let { blocks, active } = grid
-  for (let bz = 0, b = 0; bz < blocks; bz++) {
+  let first = layer ?? 0
+  let last = layer ?? blocks - 1
+  for (let bz = first, b = first * blocks * blocks; bz <= last; bz++) {
     let z1 = Math.min(bz * BLOCK + BLOCK - 1, high)
     for (let by = 0; by < blocks; by++) {
       let y1 = Math.min(by * BLOCK + BLOCK - 1, high)

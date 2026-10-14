@@ -9,7 +9,8 @@
 //
 // Wide windows lay the panels over the view (the parts on the left, the
 // selected part on the right); a compact one stacks the view above one
-// panel at a time, chosen by tabs, so the two can never overlap.
+// panel at a time, chosen by tabs, so the two can never overlap; a chevron
+// beside the tabs folds that panel away, and tapping a tab opens it again.
 
 import { capabilities, createEffect, createMemo, createSignal, onSettled, pct, Show, textInputActive, windowSize, type KeyEvent } from "@solidrt/core"
 import { Button, Card, Modal, ScrollView, SegmentedControl, Slider, Text, View } from "@solidrt/components"
@@ -24,14 +25,15 @@ import { nearestPart } from "../model/field"
 import { createModelStore } from "../model/model-store"
 import { createPalette, STARTER_PALETTE } from "../model/palette"
 import { modelBounds, newModel, type Part } from "../model/part"
+import { isAxial } from "../model/primitives"
 import type { Vec3 } from "../model/types"
-import { DEFAULT_HEIGHT_MM, DEFAULT_MAX_COLOURS } from "../print/print"
+import { DEFAULT_HEIGHT_MM, DEFAULT_MAX_COLOURS, DEFAULT_PRINT_VOXEL_SIZE, describePrintEstimate, MIN_PRINT_VOXEL_SIZE, printEstimate, printVoxelSizeOk } from "../print/print"
 import { registerShortcuts } from "../state"
 import { PANEL, QUIET } from "../theme"
 import { FilesPanel } from "../ui/files-panel"
 import { PartsPanel } from "../ui/parts-panel"
 import { TransformPanel } from "../ui/transform-panel"
-import { Viewport } from "../view/viewport"
+import { Viewport, type Tool } from "../view/viewport"
 
 /** How long the model has to be still before it is re-meshed, in ms. */
 const REBUILD_MS = 90
@@ -43,7 +45,6 @@ const AUTOSAVE_MS = 1000
 const mesher = isolate<typeof Mesher>("mesher")
 const side = isolate<typeof Mesher>("mesher")
 
-type Tool = "select" | "move"
 type Frame = { centre: Vec3; size: number }
 
 const message = (reason: unknown): string => (reason instanceof Error ? reason.message : String(reason))
@@ -55,6 +56,9 @@ export function Modeller() {
   let [mode, setMode] = createSignal<MeshMode>(DEFAULT_MESH_MODE)
   let [resolution, setResolution] = createSignal<Resolution>(DEFAULT_RESOLUTION)
   let [sheet, setSheet] = createSignal<"parts" | "shape">("parts")
+  // A compact window can fold the panel down to its tabs, giving the view the
+  // height back. Open by default: the tabs are how the parts list is found.
+  let [sheetOpen, setSheetOpen] = createSignal(true)
   let [status, setStatus] = createSignal("meshing…")
   let [mesh, setMesh] = createSignal<ViewMesh | undefined>()
   let [frame, setFrame] = createSignal<Frame | undefined>(undefined, {
@@ -71,6 +75,13 @@ export function Modeller() {
   let [exported, setExported] = createSignal<string | undefined>()
   let [heightMm, setHeightMm] = createSignal(DEFAULT_HEIGHT_MM)
   let [filaments, setFilaments] = createSignal(DEFAULT_MAX_COLOURS)
+  let [printResolution, setPrintResolution] = createSignal(DEFAULT_PRINT_VOXEL_SIZE)
+  let [printing, setPrinting] = createSignal<number | undefined>()
+  let estimate = () => {
+    let voxelSize = printResolution()
+    let found = printVoxelSizeOk(voxelSize) ? printEstimate(store.parts(), voxelSize) : undefined
+    return found === undefined ? "" : describePrintEstimate(found)
+  }
   let replacing: string | undefined
 
   let selected = createMemo((): Part | undefined => {
@@ -78,6 +89,11 @@ export function Modeller() {
     return id === undefined ? undefined : store.parts().find(part => part.id === id)
   })
   let wide = () => capabilities.windowSizeClass !== "compact"
+  // Turning a sphere, an ellipsoid or a round box changes nothing.
+  let rotatable = () => {
+    let part = selected()
+    return part !== undefined && isAxial(part.shape.type)
+  }
 
   // -- Rebuilds: debounced, one in flight, the latest model next --------------
 
@@ -219,7 +235,19 @@ export function Modeller() {
   let exportPrint = () =>
     attempt(async () => {
       let name = home() ?? "model"
-      let bytes = await side.exportThreeMf(store.parts() as Part[], { heightMm: heightMm(), maxColours: filaments(), title: name })
+      let voxelSize = printResolution()
+      if (!printVoxelSizeOk(voxelSize)) throw new Error(`a print meshes between ${MIN_PRINT_VOXEL_SIZE} and ${DEFAULT_PRINT_VOXEL_SIZE} world units a voxel`)
+      let bytes: Uint8Array | undefined
+      try {
+        setPrinting(0)
+        for await (let step of side.exportThreeMf(store.parts() as Part[], { heightMm: heightMm(), maxColours: filaments(), title: name, voxelSize })) {
+          if ("bytes" in step) bytes = step.bytes
+          else setPrinting(step.progress)
+        }
+      } finally {
+        setPrinting(undefined)
+      }
+      if (bytes === undefined) throw new Error("the export ended without a file")
       setExported(await writeExport(name, bytes))
     })
 
@@ -268,6 +296,7 @@ export function Modeller() {
         else setTool("select")
       } else if (key === "v") setTool("select")
       else if ((key === "g" || key === "m") && selected() !== undefined) setTool("move")
+      else if (key === "r" && rotatable()) setTool("rotate")
     }),
   )
 
@@ -289,6 +318,9 @@ export function Modeller() {
       </Button>
       <Button variant={tool() === "move" ? "primary" : "secondary"} disabled={selected() === undefined} onPress={() => setTool("move")}>
         Move
+      </Button>
+      <Button variant={tool() === "rotate" ? "primary" : "secondary"} disabled={!rotatable()} onPress={() => setTool("rotate")}>
+        Rotate
       </Button>
       <SegmentedControl options={MESH_MODES.map(m => ({ value: m.value, label: m.label }))} value={mode()} onChange={setMode} layout={{ width: 128 }} />
     </View>
@@ -347,11 +379,9 @@ export function Modeller() {
       part={selected()}
       tool={tool()}
       ghostFor={part => side.ghost(part)}
-      onPick={point => {
-        let part = nearestPart(store.parts(), point.x, point.y, point.z)
-        if (part !== undefined) store.select(part.id)
-      }}
+      onPick={point => store.select(point === undefined ? undefined : nearestPart(store.parts(), point.x, point.y, point.z)?.id)}
       onMove={(id, origin) => store.change(id, { origin })}
+      onTurn={(id, orientation) => store.change(id, { orientation })}
     />
   )
 
@@ -371,7 +401,7 @@ export function Modeller() {
             <Tools />
             <ResolutionRow />
             <ScrollView layout={{ flexGrow: 1, minHeight: 0 }}>
-              <PartsPanel store={store} />
+              <PartsPanel store={store} onDuplicate={() => setTool("move")} />
             </ScrollView>
             <Footer />
           </View>
@@ -386,22 +416,33 @@ export function Modeller() {
       </View>
 
       <Show when={!wide()}>
-        <View layout={{ height: pct(42), padding: 8 }} style={{ backgroundColor: PANEL }}>
-          <ScrollView layout={{ flexGrow: 1, minHeight: 0 }}>
-            <Show when={sheet() === "parts"} fallback={<Shape />}>
-              <PartsPanel store={store} />
-            </Show>
-          </ScrollView>
-        </View>
+        <Show when={sheetOpen()}>
+          <View layout={{ height: pct(42), padding: 8 }} style={{ backgroundColor: PANEL }}>
+            <ScrollView layout={{ flexGrow: 1, minHeight: 0 }}>
+              <Show when={sheet() === "parts"} fallback={<Shape />}>
+                <PartsPanel store={store} onDuplicate={() => setTool("move")} />
+              </Show>
+            </ScrollView>
+          </View>
+        </Show>
         <View layout={{ padding: 8, gap: 8 }}>
-          <SegmentedControl
-            options={[
-              { value: "parts" as const, label: `Parts (${store.parts().length})` },
-              { value: "shape" as const, label: "Shape" },
-            ]}
-            value={sheet()}
-            onChange={setSheet}
-          />
+          <View layout={{ flexDirection: "row", gap: 6, alignItems: "center" }}>
+            <SegmentedControl
+              options={[
+                { value: "parts" as const, label: `Parts (${store.parts().length})` },
+                { value: "shape" as const, label: "Shape" },
+              ]}
+              value={sheet()}
+              onChange={id => {
+                setSheet(id)
+                setSheetOpen(true)
+              }}
+              layout={{ flexGrow: 1 }}
+            />
+            <Button variant="secondary" layout={{ paddingLeft: 12, paddingRight: 12 }} onPress={() => setSheetOpen(open => !open)}>
+              {sheetOpen() ? "▾" : "▴"}
+            </Button>
+          </View>
           <Tools />
           <ResolutionRow />
           <Footer />
@@ -419,6 +460,10 @@ export function Modeller() {
               readout={mesh() === undefined ? "nothing to print" : describeReport(mesh()!.report)}
               height={heightMm()}
               filaments={filaments()}
+              resolution={printResolution()}
+              estimate={estimate()}
+              printing={printing()}
+              onResolution={setPrintResolution}
               notice={notice()}
               exported={exported()}
               busy={busy()}

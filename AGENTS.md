@@ -12,9 +12,9 @@ It ports big-mesh-studios' `apps/sdf-modeller`. UPSTREAM.md pins the upstream
 commit the port matches, maps upstream files to ours and keeps a ledger of
 every later upstream commit (pending, ported, covered, skipped). Read it
 before porting an upstream change or comparing with upstream;
-`scripts/upstream.sh` shows what changed since the pin. A commit that ports
-upstream work names the upstream commits and updates the ledger in the same
-commit.
+`scripts/upstream.sh` shows what changed since the pin. Porting work is
+staged with its ledger update, never committed: the maintainer reviews what
+is staged and commits it (UPSTREAM.md, "Working through a change").
 
 ## Levels: core, and extensions on top
 

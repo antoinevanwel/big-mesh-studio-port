@@ -6,7 +6,7 @@
 // (upstream ADR 0030 / 0046). Ported from big-mesh-studios' packages/meshing.
 
 import type { MeshBuilder } from "./builder"
-import { forEachActiveCell, gridPoints, type Grid } from "./grid"
+import { finish, forEachActiveCell, gridPoints, type Grid } from "./grid"
 
 // Lorensen-Bourke corner numbering, which the table is written against.
 const CORNERS = [
@@ -314,7 +314,14 @@ const TRI_TABLE: Int8Array = (() => {
   return table
 })()
 
-export const marchingCubes = (grid: Grid, out: MeshBuilder): void => {
+export const marchingCubes = (grid: Grid, out: MeshBuilder): void => finish(marchingCubesSteps(grid, out))
+
+/**
+ * `marchingCubes`, yielding its progress (0..1) after each layer of blocks,
+ * for an export to report from the mesher isolate (see `sampleGridSteps`
+ * in grid.ts for why it is a generator).
+ */
+export function* marchingCubesSteps(grid: Grid, out: MeshBuilder): Generator<number, void> {
   let { origin, sampleSize, values } = grid
   let n = gridPoints(grid.samples)
   let cells = n - 1
@@ -326,12 +333,15 @@ export const marchingCubes = (grid: Grid, out: MeshBuilder): void => {
   let cornerVertex = new Int32Array(n * n * n).fill(-1)
   let corners = new Float32Array(8)
   let vertices = new Int32Array(12)
+  // Each corner's offset from the cell's first corner in `values`: the same
+  // eight numbers for every cell of the grid (upstream 49bad35).
+  let strides = Int32Array.from(CORNERS, o => (o[2] * n + o[1]) * n + o[0])
 
-  forEachActiveCell(grid, (cx, cy, cz) => {
+  let visit = (cx: number, cy: number, cz: number) => {
     let pattern = 0
+    let base = (cz * n + cy) * n + cx
     for (let c = 0; c < 8; c++) {
-      let o = CORNERS[c]!
-      let value = values[((cz + o[2]) * n + cy + o[1]) * n + cx + o[0]]!
+      let value = values[base + strides[c]!]!
       corners[c] = value
       if (value < 0) pattern |= 1 << c
     }
@@ -349,9 +359,8 @@ export const marchingCubes = (grid: Grid, out: MeshBuilder): void => {
       let slots: Int32Array
       let index: number
       if (t <= 0 || t >= 1) {
-        let o = t <= 0 ? a : b
         slots = cornerVertex
-        index = ((cz + o[2]) * n + cy + o[1]) * n + cx + o[0]
+        index = base + strides[t <= 0 ? ca : cb]!
       } else {
         let axis = edgeAxis(edge)
         let ex = cx + Math.min(a[0], b[0])
@@ -384,5 +393,9 @@ export const marchingCubes = (grid: Grid, out: MeshBuilder): void => {
       // The table winds inward for this corner order; reversed, the faces point out.
       out.triangle(p, r, q)
     }
-  })
+  }
+  for (let layer = 0; layer < grid.blocks; layer++) {
+    forEachActiveCell(grid, visit, layer)
+    yield (layer + 1) / grid.blocks
+  }
 }

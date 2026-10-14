@@ -1,11 +1,12 @@
 // "Your files": the document's name and Save, New, the export for a 3D
 // printer, and the models kept in this app's storage as cards to open.
 // Upstream opens and saves through the browser's file pickers; there are
-// none here, so the cards are the open dialog (see FEEDBACK.md). Laid out.
+// none here, so the cards are the open dialog (see SOLIDRT-FEEDBACK.md). Laid out.
 
 import { createSignal, For, Show } from "@solidrt/core"
-import { Button, Card, Divider, Pressable, ScrollView, Text, TextInput, View } from "@solidrt/components"
+import { Button, Card, Divider, ProgressBar, Pressable, ScrollView, Text, TextInput, View } from "@solidrt/components"
 import type { SavedModel } from "../file/library"
+import { PRINT_RESOLUTIONS } from "../print/print"
 import { ACCENT, QUIET } from "../theme"
 import { Heading, NumberField } from "./bits"
 
@@ -32,6 +33,12 @@ export interface FilesPanelProps {
   readonly readout: string
   readonly height: number
   readonly filaments: number
+  /** The print's voxel size, as typed (checked at Export). */
+  readonly resolution: number
+  /** What a print at that resolution will cost, or "" for none to give. */
+  readonly estimate: string
+  /** How far an export's meshing has got (0..1), while one runs. */
+  readonly printing: number | undefined
   readonly notice: string | undefined
   readonly exported: string | undefined
   readonly busy: boolean
@@ -42,6 +49,7 @@ export interface FilesPanelProps {
   readonly onExport: () => void
   readonly onHeight: (mm: number) => void
   readonly onFilaments: (count: number) => void
+  readonly onResolution: (voxelSize: number) => void
   readonly onClose: () => void
 }
 
@@ -87,13 +95,32 @@ export function FilesPanel(props: FilesPanelProps) {
       <Card title="Print">
         <View layout={{ flexDirection: "row", gap: 12, flexWrap: "wrap" }}>
           <View layout={{ flexGrow: 1, minWidth: 150 }}>
-            <NumberField label="height mm" labelWidth={72} digits={0} value={props.height} onCommit={value => props.onHeight(value)} />
+            <NumberField label="height mm" labelWidth={72} digits={0} step={1} value={props.height} onCommit={value => props.onHeight(value)} />
           </View>
           <View layout={{ flexGrow: 1, minWidth: 150 }}>
-            <NumberField label="filaments" labelWidth={72} digits={0} value={props.filaments} onCommit={value => props.onFilaments(value)} />
+            <NumberField label="filaments" labelWidth={72} digits={0} step={1} value={props.filaments} onCommit={value => props.onFilaments(value)} />
           </View>
         </View>
+        {/* A typed size, as upstream's: the cost underneath is what makes it safe to type one. */}
+        <NumberField
+          label="resolution"
+          labelWidth={72}
+          format={String}
+          stepTo={(value, direction) =>
+            direction > 0 ? (PRINT_RESOLUTIONS.find(size => size > value) ?? value) : ([...PRINT_RESOLUTIONS].reverse().find(size => size < value) ?? value)
+          }
+          value={props.resolution}
+          onCommit={value => props.onResolution(value)}
+        />
+        <Show when={props.estimate !== ""}>
+          <Text variant="caption" muted>
+            {props.estimate}
+          </Text>
+        </Show>
         <Text variant="caption" muted>{`on screen: ${props.readout}`}</Text>
+        <Show when={props.printing !== undefined}>
+          <ProgressBar value={props.printing} />
+        </Show>
         <View layout={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
           <Button variant="secondary" disabled={props.busy} onPress={props.onExport}>
             Export .3mf

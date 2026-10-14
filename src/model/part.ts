@@ -66,6 +66,27 @@ export const toEuler = (q: Quat): { yaw: number; pitch: number; roll: number } =
   return { yaw: degrees(yaw), pitch: degrees(pitch), roll: degrees(roll) }
 }
 
+/**
+ * `a` after `b`: the rotation that applies `b` first and `a` second. A turn
+ * about a WORLD axis is `multiply(turn, orientation)`; the other order turns
+ * about the part's own axis, which for a part laid on its side is not the
+ * one under the finger.
+ */
+export const multiply = (a: Quat, b: Quat): Quat => ({
+  x: a.w * b.x + a.x * b.w + a.y * b.z - a.z * b.y,
+  y: a.w * b.y - a.x * b.z + a.y * b.w + a.z * b.x,
+  z: a.w * b.z + a.x * b.y - a.y * b.x + a.z * b.w,
+  w: a.w * b.w - a.x * b.x - a.y * b.y - a.z * b.z,
+})
+
+/** A turn of `radians` about the axis (x, y, z), which need not be unit length. */
+export const axisAngle = (x: number, y: number, z: number, radians: number): Quat => {
+  let length = Math.sqrt(x * x + y * y + z * z)
+  if (length === 0) return IDENTITY
+  let s = Math.sin(radians / 2) / length
+  return { x: x * s, y: y * s, z: z * s, w: Math.cos(radians / 2) }
+}
+
 /** The largest distance from a part's origin to any point of it, whatever its rotation. */
 export const partHalfDiagonal = (part: Part): number => {
   let half = primitiveHalfExtents(part.shape)
