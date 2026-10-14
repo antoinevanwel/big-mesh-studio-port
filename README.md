@@ -2,7 +2,9 @@
 
 A port of the SDF modeller from
 [big-mesh-studios](https://github.com/big-mesh-studios/big-mesh-studios)
-(`apps/sdf-modeller`) to SolidRT.
+(`apps/sdf-modeller`) to SolidRT. [UPSTREAM.md](UPSTREAM.md) records the
+upstream commit it matches and what became of each upstream change since;
+`scripts/upstream.sh` lists what is new.
 
 ## Run
 

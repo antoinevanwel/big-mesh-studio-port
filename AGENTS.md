@@ -6,6 +6,16 @@ whole file before writing or editing code here - it is short on purpose. The
 depth lives in the topic files listed under "Read before you", one of which you
 should open whenever the work matches its trigger.
 
+## This app is a port
+
+It ports big-mesh-studios' `apps/sdf-modeller`. UPSTREAM.md pins the upstream
+commit the port matches, maps upstream files to ours and keeps a ledger of
+every later upstream commit (pending, ported, covered, skipped). Read it
+before porting an upstream change or comparing with upstream;
+`scripts/upstream.sh` shows what changed since the pin. A commit that ports
+upstream work names the upstream commits and updates the ledger in the same
+commit.
+
 ## Levels: core, and extensions on top
 
 - @solidrt/core is the low-level foundation: host intrinsics (`<window>`,
