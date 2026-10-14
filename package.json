@@ -2,6 +2,7 @@
   "name": "big-mesh-studio-port",
   "type": "module",
   "private": true,
+  "license": "MIT",
   "solidrt": {
     "appId": null,
     "displayName": null,
