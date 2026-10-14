@@ -1,9 +1,7 @@
-// Zip archives: written with stored (uncompressed) entries, read with
-// stored or deflated ones. A project file and a 3MF print are both zips;
-// the files are small, so storing them costs a few kilobytes and keeps the
-// writer to a CRC and two headers per entry.
-
-import { inflate } from "./inflate"
+// Zip archives, written and read with DEFLATE entries (stored ones read too,
+// and written for an entry deflating would not shrink). A project file and
+// a 3MF print are both zips; the codec is the runtime's Compression Streams,
+// which run off the JS thread, so writing and reading are async.
 
 const CRC_TABLE = (() => {
   let table = new Uint32Array(256)
@@ -34,14 +32,44 @@ const decoder = new TextDecoder()
 const DOS_DATE = (1 << 5) | 1
 const DOS_TIME = 0
 
-export const writeZip = (entries: readonly ZipEntry[]): Uint8Array => {
-  let files = entries.map(entry => {
-    let name = encoder.encode(entry.name)
-    let data = typeof entry.data === "string" ? encoder.encode(entry.data) : entry.data
-    return { name, data, crc: crc32(data), offset: 0 }
-  })
+const STORED = 0
+const DEFLATED = 8
+
+// Runs bytes through a compression stream. The write is not awaited: the
+// stream produces as the reader pulls, so awaiting it first would stall a
+// large input; a corrupt one errors both sides, and the read side throws.
+const transform = async (bytes: Uint8Array, stream: CompressionStream | DecompressionStream): Promise<Uint8Array> => {
+  let writer = stream.writable.getWriter()
+  writer.write(bytes).catch(() => {})
+  writer.close().catch(() => {})
+  let chunks: Uint8Array[] = []
+  let length = 0
+  for await (let chunk of stream.readable) {
+    chunks.push(chunk)
+    length += chunk.length
+  }
+  if (chunks.length === 1) return chunks[0]!
+  let out = new Uint8Array(length)
+  let at = 0
+  for (let chunk of chunks) {
+    out.set(chunk, at)
+    at += chunk.length
+  }
+  return out
+}
+
+export const writeZip = async (entries: readonly ZipEntry[]): Promise<Uint8Array> => {
+  let files = await Promise.all(
+    entries.map(async entry => {
+      let name = encoder.encode(entry.name)
+      let data = typeof entry.data === "string" ? encoder.encode(entry.data) : entry.data
+      let deflated = await transform(data, new CompressionStream("deflate-raw"))
+      let shrinks = deflated.length < data.length
+      return { name, size: data.length, body: shrinks ? deflated : data, method: shrinks ? DEFLATED : STORED, crc: crc32(data), offset: 0 }
+    }),
+  )
   let size = 22
-  for (let file of files) size += 30 + file.name.length + file.data.length + 46 + file.name.length
+  for (let file of files) size += 30 + file.name.length + file.body.length + 46 + file.name.length
   let out = new Uint8Array(size)
   let view = new DataView(out.buffer)
   let at = 0
@@ -51,17 +79,17 @@ export const writeZip = (entries: readonly ZipEntry[]): Uint8Array => {
     view.setUint32(at, 0x04034b50, true)
     view.setUint16(at + 4, 20, true)
     view.setUint16(at + 6, 0x0800, true) // names are UTF-8
-    view.setUint16(at + 8, 0, true) // stored
+    view.setUint16(at + 8, file.method, true)
     view.setUint16(at + 10, DOS_TIME, true)
     view.setUint16(at + 12, DOS_DATE, true)
     view.setUint32(at + 14, file.crc, true)
-    view.setUint32(at + 18, file.data.length, true)
-    view.setUint32(at + 22, file.data.length, true)
+    view.setUint32(at + 18, file.body.length, true)
+    view.setUint32(at + 22, file.size, true)
     view.setUint16(at + 26, file.name.length, true)
     view.setUint16(at + 28, 0, true)
     out.set(file.name, at + 30)
-    out.set(file.data, at + 30 + file.name.length)
-    at += 30 + file.name.length + file.data.length
+    out.set(file.body, at + 30 + file.name.length)
+    at += 30 + file.name.length + file.body.length
   }
 
   let directory = at
@@ -70,12 +98,12 @@ export const writeZip = (entries: readonly ZipEntry[]): Uint8Array => {
     view.setUint16(at + 4, 20, true)
     view.setUint16(at + 6, 20, true)
     view.setUint16(at + 8, 0x0800, true)
-    view.setUint16(at + 10, 0, true)
+    view.setUint16(at + 10, file.method, true)
     view.setUint16(at + 12, DOS_TIME, true)
     view.setUint16(at + 14, DOS_DATE, true)
     view.setUint32(at + 16, file.crc, true)
-    view.setUint32(at + 20, file.data.length, true)
-    view.setUint32(at + 24, file.data.length, true)
+    view.setUint32(at + 20, file.body.length, true)
+    view.setUint32(at + 24, file.size, true)
     view.setUint16(at + 28, file.name.length, true)
     view.setUint32(at + 42, file.offset, true)
     out.set(file.name, at + 46)
@@ -127,7 +155,7 @@ export class ZipReader {
     return this.entries.has(name)
   }
 
-  bytesOf(name: string): Uint8Array | undefined {
+  async bytesOf(name: string): Promise<Uint8Array | undefined> {
     let entry = this.entries.get(name)
     if (entry === undefined) return undefined
     let view = new DataView(this.bytes.buffer, this.bytes.byteOffset, this.bytes.byteLength)
@@ -135,15 +163,20 @@ export class ZipReader {
     let start = entry.offset + 30 + view.getUint16(entry.offset + 26, true) + view.getUint16(entry.offset + 28, true)
     let raw = this.bytes.subarray(start, start + entry.compressed)
     let data: Uint8Array
-    if (entry.method === 0) data = raw.slice()
-    else if (entry.method === 8) data = inflate(raw)
-    else throw new Error(`the zip entry ${name} uses compression method ${entry.method}`)
+    if (entry.method === STORED) data = raw.slice()
+    else if (entry.method === DEFLATED) {
+      try {
+        data = await transform(raw, new DecompressionStream("deflate-raw"))
+      } catch {
+        throw new Error(`the zip entry ${name} is damaged`)
+      }
+    } else throw new Error(`the zip entry ${name} uses compression method ${entry.method}`)
     if (data.length !== entry.size || crc32(data) !== entry.crc) throw new Error(`the zip entry ${name} is damaged`)
     return data
   }
 
-  textOf(name: string): string | undefined {
-    let data = this.bytesOf(name)
+  async textOf(name: string): Promise<string | undefined> {
+    let data = await this.bytesOf(name)
     return data === undefined ? undefined : decoder.decode(data)
   }
 }

@@ -1,4 +1,6 @@
+import { file } from "flux:fs"
 import { test, expect } from "@solidrt/test"
+import { ZipReader } from "../src/file/zip"
 
 type App = Parameters<Parameters<typeof test>[1]>[0]
 
@@ -65,4 +67,17 @@ test("the files dialog saves the model and lists it", async app => {
   // The name heads the dialog, fills the name field and labels the new card.
   expect(root.findAll({ text: "model" }).length).toBe(3)
   expect(root.find({ text: "Delete" }).visible).toBe(true)
+})
+
+test("an export writes a 3mf whose model is deflated", async app => {
+  let root = await start(app)
+  await app.tap(root.find({ text: "Files" }))
+  await rest(app)
+  await app.tap(root.find({ text: "Export .3mf" }))
+  await rest(app)
+  expect(root.find({ text: /^written to .*model\.3mf$/ }).visible).toBe(true)
+  let bytes = await file("exports/model.3mf").bytes()
+  let xml = (await new ZipReader(bytes).textOf("3D/3dmodel.model"))!
+  expect(xml).toContain('unit="millimeter"')
+  expect(bytes.length).toBeLessThan(xml.length / 3)
 })

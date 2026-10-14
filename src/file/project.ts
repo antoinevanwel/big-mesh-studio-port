@@ -32,7 +32,7 @@ export interface Project {
   readonly view: ProjectView
 }
 
-export const writeProject = (project: Project): Uint8Array => {
+export const writeProject = (project: Project): Promise<Uint8Array> => {
   let { parts, palette, view } = project
   let manifest = {
     version: PROJECT_VERSION,
@@ -61,14 +61,14 @@ export const writeProject = (project: Project): Uint8Array => {
 const isChannel = (value: unknown): value is number => typeof value === "number" && Number.isInteger(value) && value >= 0 && value <= 255
 
 /** Reads a project, or throws a sentence naming what is wrong with it. */
-export const readProject = (bytes: Uint8Array): Project => {
+export const readProject = async (bytes: Uint8Array): Promise<Project> => {
   let zip: ZipReader
   try {
     zip = new ZipReader(bytes)
   } catch {
     throw new Error("not a file a model was saved as")
   }
-  let text = zip.textOf(MANIFEST_FILE)
+  let text = await zip.textOf(MANIFEST_FILE)
   if (text === undefined) throw new Error(`no ${MANIFEST_FILE} at the file's root`)
   let manifest: Record<string, unknown>
   try {
@@ -99,7 +99,7 @@ export const readProject = (bytes: Uint8Array): Project => {
     view.resolution > 0
   if (!valid) throw new Error(`${MANIFEST_FILE} is not a model manifest this build can open`)
 
-  let model = zip.bytesOf(MODEL_FILE)
+  let model = await zip.bytesOf(MODEL_FILE)
   if (model === undefined) throw new Error(`no ${MODEL_FILE} in the file`)
   let operations
   try {

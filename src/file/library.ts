@@ -31,9 +31,9 @@ export const cleanName = (typed: string): string =>
 
 const pathOf = (name: string): string => `${MODELS}/${name}${PROJECT_EXTENSION}`
 
-const partsIn = (bytes: Uint8Array): number => {
+const partsIn = async (bytes: Uint8Array): Promise<number> => {
   try {
-    let manifest = JSON.parse(new ZipReader(bytes).textOf("manifest.json") ?? "{}")
+    let manifest = JSON.parse((await new ZipReader(bytes).textOf("manifest.json")) ?? "{}")
     return Array.isArray(manifest.ids) ? manifest.ids.length : 0
   } catch {
     return 0
@@ -49,7 +49,7 @@ export const listModels = async (): Promise<SavedModel[]> => {
     if (entry.type !== "file" || !entry.name.endsWith(PROJECT_EXTENSION)) continue
     let handle = file(`${MODELS}/${entry.name}`)
     let [bytes, stat] = await Promise.all([handle.bytes(), handle.stat()])
-    found.push({ name: entry.name.slice(0, -PROJECT_EXTENSION.length), parts: partsIn(bytes), savedAt: stat.mtime })
+    found.push({ name: entry.name.slice(0, -PROJECT_EXTENSION.length), parts: await partsIn(bytes), savedAt: stat.mtime })
   }
   return found.sort((a, b) => (b.savedAt ?? 0) - (a.savedAt ?? 0) || a.name.localeCompare(b.name))
 }

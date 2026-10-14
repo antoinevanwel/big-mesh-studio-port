@@ -164,7 +164,7 @@ export interface PrintOptions {
 }
 
 /** The model as 3MF bytes, or a thrown sentence saying why it cannot be printed. */
-export const exportThreeMf = (parts: readonly Part[], options: PrintOptions): Uint8Array => {
+export const exportThreeMf = async (parts: readonly Part[], options: PrintOptions): Promise<Uint8Array> => {
   let result = printedMesh(parts)
   let problem = printProblem(result && { triangles: result.mesh.triangleCount, boundaryEdges: result.report.boundaryEdges })
   if (problem !== undefined) throw new Error(problem)

@@ -79,6 +79,6 @@ export function ghost(part: Part): { vertices: Float32Array; indices: Uint32Arra
 }
 
 /** The model as a 3MF print; rejects with the sentence that says why it cannot be. */
-export function exportThreeMf(parts: Part[], options: PrintOptions): Uint8Array {
+export function exportThreeMf(parts: Part[], options: PrintOptions): Promise<Uint8Array> {
   return writeThreeMf(parts, options)
 }

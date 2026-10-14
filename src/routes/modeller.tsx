@@ -144,7 +144,7 @@ export function Modeller() {
     if (draftTimer !== undefined) clearTimeout(draftTimer)
     draftTimer = setTimeout(() => {
       let at = Date.now()
-      void saveDraft(writeProject(project()), at).then(
+      void writeProject(project()).then(bytes => saveDraft(bytes, at)).then(
         () => setDraftAt(at),
         () => {},
       )
@@ -182,7 +182,7 @@ export function Modeller() {
         throw new Error(`a model called ${name} already exists — Save again to replace it`)
       }
       replacing = undefined
-      await saveModel(name, writeProject(project()))
+      await saveModel(name, await writeProject(project()))
       setHome(name)
       setStatus(`saved as ${name}`)
       await refreshModels()
@@ -190,7 +190,7 @@ export function Modeller() {
 
   let open = (name: string) =>
     attempt(async () => {
-      let opened = readProject(await readModel(name))
+      let opened = await readProject(await readModel(name))
       if (!loadInto(opened, `open ${name}`)) throw new Error("this file holds more parts than the limit, or two parts with one id")
       setHome(name)
       setExported(undefined)
@@ -230,7 +230,7 @@ export function Modeller() {
       try {
         let draft = await readDraft()
         if (draft !== undefined && !disposed) {
-          if (loadInto(readProject(draft.bytes), "restore")) {
+          if (loadInto(await readProject(draft.bytes), "restore")) {
             setDraftAt(draft.at || undefined)
             setStatus("restored from this app")
           }
