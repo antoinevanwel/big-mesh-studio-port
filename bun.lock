@@ -5,15 +5,15 @@
     "": {
       "name": "big-mesh-studio-port",
       "dependencies": {
-        "@solidrt/3d": "0.0.75",
-        "@solidrt/components": "0.0.75",
-        "@solidrt/core": "0.0.75",
-        "@solidrt/router": "0.0.75",
+        "@solidrt/3d": "0.0.76",
+        "@solidrt/components": "0.0.76",
+        "@solidrt/core": "0.0.76",
+        "@solidrt/router": "0.0.76",
       },
       "devDependencies": {
-        "@solidrt/cli": "0.0.75",
-        "@solidrt/flux-types": "0.0.75",
-        "@solidrt/test": "0.0.75",
+        "@solidrt/cli": "0.0.76",
+        "@solidrt/flux-types": "0.0.76",
+        "@solidrt/test": "0.0.76",
         "typescript": "^7",
       },
     },
@@ -101,27 +101,27 @@
 
     "@solidjs/universal": ["@solidjs/universal@2.0.0-rc.14", "", { "peerDependencies": { "solid-js": "^2.0.0-rc.14" } }, "sha512-FEcstwKs/2fW5G0QSWUsDZaSTlGhpCnLUVvZSOpNEdXZpL8yDZ7oq+AYetHmrW7HIaQa/ZD6jal7xDHJ3MJa5w=="],
 
-    "@solidrt/3d": ["@solidrt/3d@0.0.75", "", { "peerDependencies": { "@solidjs/signals": "2.0.0-rc.14", "@solidrt/core": "0.0.75" } }, "sha512-wnw7ZAs+Y/2KWWDyfIr10nu34FW1x1HcXfTRUy3SHFec7pxhG5SIYTHShaYPC0HbyP5ugtB6zYM4tDk34zDRBQ=="],
+    "@solidrt/3d": ["@solidrt/3d@0.0.76", "", { "peerDependencies": { "@solidjs/signals": "2.0.0-rc.14", "@solidrt/core": "0.0.76" } }, "sha512-bAEQpIPdQFcZuHUZeKUlYvmgFAgpx6C4UcIhLuilz8NYA6Jo2iPy+1jEKjLE1pRxlu2fqo08wMzUShKvTME/rw=="],
 
-    "@solidrt/cli": ["@solidrt/cli@0.0.75", "", { "dependencies": { "@babel/core": "^7.0.0", "@babel/plugin-syntax-jsx": "^7.0.0", "@babel/preset-typescript": "^7.0.0", "@clack/prompts": "^1.7.0", "@jridgewell/remapping": "^2.3.0", "@jridgewell/trace-mapping": "^0.3.25", "@modelcontextprotocol/sdk": "^1.29.0", "@solidjs/babel-plugin": "2.0.0-rc.14", "bonjour-service": "^1.4.0", "qrcode-generator": "^2.0.4", "zod": "^4.4.3" }, "optionalDependencies": { "@solidrt/darwin-arm64": "0.0.75", "@solidrt/linux-arm64-gnu": "0.0.75", "@solidrt/linux-x64-gnu": "0.0.75", "@solidrt/win32-x64-msvc": "0.0.75" }, "peerDependencies": { "typescript": "^7" }, "bin": { "sol": "bin/sol" } }, "sha512-yb8kYUqqMRGNTbfjOD5rU7hwJ4t8cWdyBm7LnmZ+xfD7fDdEd4qk4rEDYeZDT2qt11DadxqERf+mC0MQeaDSgg=="],
+    "@solidrt/cli": ["@solidrt/cli@0.0.76", "", { "dependencies": { "@babel/core": "^7.0.0", "@babel/plugin-syntax-jsx": "^7.0.0", "@babel/preset-typescript": "^7.0.0", "@clack/prompts": "^1.7.0", "@jridgewell/remapping": "^2.3.0", "@jridgewell/trace-mapping": "^0.3.25", "@modelcontextprotocol/sdk": "^1.29.0", "@solidjs/babel-plugin": "2.0.0-rc.14", "bonjour-service": "^1.4.0", "qrcode-generator": "^2.0.4", "zod": "^4.4.3" }, "optionalDependencies": { "@solidrt/darwin-arm64": "0.0.76", "@solidrt/linux-arm64-gnu": "0.0.76", "@solidrt/linux-x64-gnu": "0.0.76", "@solidrt/win32-x64-msvc": "0.0.76" }, "peerDependencies": { "typescript": "^7" }, "bin": { "sol": "bin/sol" } }, "sha512-uxGu7/EgQ42c+HWXpzOu3aqsrU6kCYihuQzOuhgFOxsoklWMxtJih3tToO6FeQxWsM8ZCuVhfjkjwa9psfAEew=="],
 
-    "@solidrt/components": ["@solidrt/components@0.0.75", "", { "dependencies": { "qrcode-generator": "^2.0.4" }, "peerDependencies": { "@solidjs/signals": "2.0.0-rc.14", "@solidrt/core": "0.0.75" } }, "sha512-sRP6wPWLVm3MaS421ILAYNb5s3fdrLl6MTTLtjUMsJ5b8VZTUJpnJMytTevPPORvkIjityH0P5bg/X5r0YvM5Q=="],
+    "@solidrt/components": ["@solidrt/components@0.0.76", "", { "dependencies": { "qrcode-generator": "^2.0.4" }, "peerDependencies": { "@solidjs/signals": "2.0.0-rc.14", "@solidrt/core": "0.0.76" } }, "sha512-j8K0Ofj8T+f0QnlTlzdyz9JoZwC0r/1CMHoY34M8OM1BXYsFiuoC1eEGFKCi5MO3uccRSnfsssTH8eYi4zlL1A=="],
 
-    "@solidrt/core": ["@solidrt/core@0.0.75", "", { "peerDependencies": { "@solidjs/signals": "2.0.0-rc.14", "@solidjs/universal": "2.0.0-rc.14", "solid-js": "2.0.0-rc.14" } }, "sha512-YzwpNtfn9mzDuZ2eudb6lS6c/WJa4eFb/oUmaLLynqD18sP0GgU9UflaQ3UR5diNQqVAmVOW6KqnpDoyHpWJ3g=="],
+    "@solidrt/core": ["@solidrt/core@0.0.76", "", { "peerDependencies": { "@solidjs/signals": "2.0.0-rc.14", "@solidjs/universal": "2.0.0-rc.14", "solid-js": "2.0.0-rc.14" } }, "sha512-G9R/IszrY0/AhttxEleBXF7S2bFy4SZZnwPEfttJLFCUVwS2I0fIMTDs3InZuI+lTCaG3jYQLrvqW66aBeuvzw=="],
 
-    "@solidrt/darwin-arm64": ["@solidrt/darwin-arm64@0.0.75", "", { "os": "darwin", "cpu": "arm64" }, "sha512-wYFQlm2/XGYagObI2csZ4MFOPySN78JE6Amja3PSOgxbWmy2aLmFyFOeX82Xh96hB5VwrG+M93y/0fTOCTuqdw=="],
+    "@solidrt/darwin-arm64": ["@solidrt/darwin-arm64@0.0.76", "", { "os": "darwin", "cpu": "arm64" }, "sha512-u3gaeW7+Ijfyaz7abawxYszwX++JGFLCnym2XOA2qaXfSSSnVKMKT328uuy1GqIOIXnl9CBWvMpzMt5VHuEbGw=="],
 
-    "@solidrt/flux-types": ["@solidrt/flux-types@0.0.75", "", {}, "sha512-nyH27tW7AjzfKlMW41OtsGhGohAJZU8XHfESglZhSeRECwp1locyI2fujZowgU4ObGN0tk9L++T6KDoNtRfuxQ=="],
+    "@solidrt/flux-types": ["@solidrt/flux-types@0.0.76", "", {}, "sha512-q/S/qJ0FHV7u/DxStidN09y/cyrWcmFWEVGz7wew5YlCiVGCiN0qKaKtoo9CWKKJIFUEyDEfhkPtqr8FSY1xyA=="],
 
-    "@solidrt/linux-arm64-gnu": ["@solidrt/linux-arm64-gnu@0.0.75", "", { "os": "linux", "cpu": "arm64" }, "sha512-8l74yvwJBmpl8bdFNzmR+m7ZdFz4ppgXOmj3w7d/DhROeldq07o9jgtGm5vYI0iWeeUcQ0vdz4PBIVmSR3TFcw=="],
+    "@solidrt/linux-arm64-gnu": ["@solidrt/linux-arm64-gnu@0.0.76", "", { "os": "linux", "cpu": "arm64" }, "sha512-eeox1EOTBjKucHF000s+fCQr47ZDc5nfHwHOzsLiISyHOT1j4SnXChW184mUgfAoNO7/0YB4C3tOe+0Jy6Q3cw=="],
 
-    "@solidrt/linux-x64-gnu": ["@solidrt/linux-x64-gnu@0.0.75", "", { "os": "linux", "cpu": "x64" }, "sha512-plUyU1Yr9s7oyoqP21XE93ZtqpJV3IsiFoICWxkqp1o42SnlFwUkPbg/JMhtNte725MAsBeivh+tlmm5Y0nSKQ=="],
+    "@solidrt/linux-x64-gnu": ["@solidrt/linux-x64-gnu@0.0.76", "", { "os": "linux", "cpu": "x64" }, "sha512-foVIW+FUXO9crimBaIPBFoE8Cgk+puECo/8x9kbrDPLlmTAAsKa9usInVpQyO0y7UJZhpuZWxO8+Qk6AZPT7Jw=="],
 
-    "@solidrt/router": ["@solidrt/router@0.0.75", "", { "peerDependencies": { "@solidjs/signals": "2.0.0-rc.14", "@solidrt/core": "0.0.75" } }, "sha512-sgsbFDgt1ZYzUZvziF3Ka4bXFWVhLEnWeBu9/Vep2GH30qRpCuk/EtD4Rc8Uga8nSqdCPeRXzNxJ7RaN5hIqrQ=="],
+    "@solidrt/router": ["@solidrt/router@0.0.76", "", { "peerDependencies": { "@solidjs/signals": "2.0.0-rc.14", "@solidrt/core": "0.0.76" } }, "sha512-oAnl93AzgZnvQiZXgjSgEWy8LALcUqyqyUic6aEu7Xz4z23rC3FAl/1qR9G2Hq1wunGTFWKP1ciF3/1bc+H4TQ=="],
 
-    "@solidrt/test": ["@solidrt/test@0.0.75", "", { "peerDependencies": { "@solidrt/core": "0.0.75" } }, "sha512-PVCP3K461T2zZoWCy4MLQWuIGuYC+RQPW7tTeTLhymMVpuhXr+83D/DQsQSmLR2t9KS9JiKNG+VW6xdqD6Y+hQ=="],
+    "@solidrt/test": ["@solidrt/test@0.0.76", "", { "peerDependencies": { "@solidrt/core": "0.0.76" } }, "sha512-alilq1cDjUUu/hFYWv9Gs2Rp5tIJBj8N4AdT32G0rbYhciE1vWDWaX7Xd57LXrxsiaPsdNd1MZyECVqmG9rwAw=="],
 
-    "@solidrt/win32-x64-msvc": ["@solidrt/win32-x64-msvc@0.0.75", "", { "os": "win32", "cpu": "x64" }, "sha512-rEOR8/Ja+FYsUHOe6UT/vpTqwjQlikt8NxRqfZgJ8Zf3jBJXGZsSmFZEsU12/AoKcNt9CTLrKwQF1yiWZDZnXw=="],
+    "@solidrt/win32-x64-msvc": ["@solidrt/win32-x64-msvc@0.0.76", "", { "os": "win32", "cpu": "x64" }, "sha512-jHTTALDl/H0MGQhfcn3IO2REuG9xBsvnpK0V0nCRJw3QKf//QdjV9c6Pp9kAFKv4mTXynpwtASXnVQ21IWZcHQ=="],
 
     "@typescript/typescript-aix-ppc64": ["@typescript/typescript-aix-ppc64@7.0.2", "", { "os": "aix", "cpu": "ppc64" }, "sha512-MTKKkWB7p/0E9xi1d1tHtZ5PiLkGEMIq88pK2CubZjOsLtYTLqhgIgi6zepFa+9GHZ6h05NMCkQxGKiPXMxXtQ=="],
 

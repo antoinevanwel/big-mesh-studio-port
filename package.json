@@ -35,15 +35,15 @@
     "test": "sol test"
   },
   "dependencies": {
-    "@solidrt/core": "0.0.75",
-    "@solidrt/components": "0.0.75",
-    "@solidrt/3d": "0.0.75",
-    "@solidrt/router": "0.0.75"
+    "@solidrt/core": "0.0.76",
+    "@solidrt/components": "0.0.76",
+    "@solidrt/3d": "0.0.76",
+    "@solidrt/router": "0.0.76"
   },
   "devDependencies": {
-    "@solidrt/cli": "0.0.75",
-    "@solidrt/flux-types": "0.0.75",
-    "@solidrt/test": "0.0.75",
+    "@solidrt/cli": "0.0.76",
+    "@solidrt/flux-types": "0.0.76",
+    "@solidrt/test": "0.0.76",
     "typescript": "^7"
   }
 }
