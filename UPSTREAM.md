@@ -217,7 +217,8 @@ Triaged 2026-10-14 against upstream `825d887`.
   atlas files (unwrap*.ts, bake.ts, paint-surface.ts, reference-file.ts,
   mesh/uv-transfer.ts, mesh/triangle-bvh.ts), view/brush-hit.ts,
   unwrapping/stroke-recorder.ts, unwrapping/paint-cull.ts.
-- SolidRT gap: flux:gpu has no 3D textures. Plan: the brick pool as slices
+- SolidRT gap: flux:gpu has no 3D textures (SOLIDRT-FEEDBACK.md, "No 3D
+  textures (or texture arrays) in flux:gpu"). Plan: the brick pool as slices
   in a 2D atlas (two bilinear taps, blended), the indirection grid as a 2D
   texture, in a `phong` `surface` function; per-brick rect uploads.
 - File format: the manifest gains optional `paint: { dabs, strokes }`, the

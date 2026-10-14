@@ -18,18 +18,22 @@ const rest = async (app: App) => {
 // an isolate stream between its steps, and an app test has no wall clock to
 // wait on (SOLIDRT-FEEDBACK.md, "settle() does not wait for an isolate stream").
 // Real time passes while the test awaits real work, so small meshes in an
-// isolate of the test's own are the wait, the app settled after each.
+// isolate of the test's own are the wait, a frame played after each. Not a
+// settle: each progress step the stream brings retargets the progress bar's
+// glide, so the app is not at rest while the work runs, and settle() throws
+// once the work outlasts its 5000 ms of app time. Settled once done.
 // Revert to rest(app) once settle() counts an open stream as in flight.
 const restUntil = async (app: App, done: () => boolean) => {
   let clock = isolate<typeof Mesher>("mesher")
   try {
     for (let i = 0; i < 400 && !done(); i++) {
       await clock.mesh(newModel(), 0.5, "surface-nets")
-      await app.settle()
+      await app.frame(1)
     }
   } finally {
     clock.terminate()
   }
+  await rest(app)
 }
 
 //Usually you import dependencies at the top, this is an exception

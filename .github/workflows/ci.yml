@@ -1,0 +1,73 @@
+# Typecheck and test on every push and pull request; on a v* tag, also pack
+# the Linux executables and publish them as a GitHub release (the README's
+# download links point at the latest one).
+name: CI
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.14
+      # The app tests run the dev client headless over EGL; the runner has no
+      # GPU, so Mesa's software renderer stands in.
+      - name: Install Mesa
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libegl1 libgles2 libegl-mesa0 libgl1-mesa-dri
+      - run: bun install --frozen-lockfile
+      - name: Typecheck
+        run: bun run sol check
+      - name: Test
+        run: bun run sol test
+
+  # sol pack appends the app to the runtime of the machine it runs on, so the
+  # x86-64 build packs on an x86-64 runner. The executable ships in a tarball:
+  # a plain download loses the executable bit, an archive keeps it.
+  pack:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: test
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.14
+      - run: bun install --frozen-lockfile
+      - name: Pack
+        run: bun run sol pack -o dist/sdf-modeller-linux-x64/sdf-modeller
+      # The runtime's third-party licenses must travel with every copy.
+      - name: Add license notices
+        run: cp node_modules/@solidrt/linux-x64-gnu/THIRD-PARTY-NOTICES.txt dist/sdf-modeller-linux-x64/
+      - name: Archive
+        run: tar -czf sdf-modeller-linux-x64.tar.gz -C dist sdf-modeller-linux-x64
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-x64
+          path: sdf-modeller-linux-x64.tar.gz
+          if-no-files-found: error
+
+  release:
+    needs: pack
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: release
+          merge-multiple: true
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" release/* --repo "$GITHUB_REPOSITORY" --title "$GITHUB_REF_NAME" --generate-notes
