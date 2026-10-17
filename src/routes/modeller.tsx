@@ -390,12 +390,14 @@ export function Modeller() {
     if (bytes === undefined) throw new Error(`could not read ${name} — it has moved, or is gone`)
     let opened = await readProject(bytes)
     if (!loadInto(opened, `open ${name}`)) throw new Error("this file holds more parts than the limit, or two parts with one id")
+    // Before the awaits: the load just queued a rebuild, and its readout
+    // must land after this line, not under it (UPSTREAM.md, Deviations).
+    setStatus(`opened ${name}`)
     setHome({ kind: "file", path, name })
     // The opened project's own count: store.parts() reads the old list until the flush.
     await rememberFile(path, name, opened.parts.length)
     await refreshRecent()
     closeFiles()
-    setStatus(`opened ${name}`)
   }
 
   let openFromDisk = () =>
