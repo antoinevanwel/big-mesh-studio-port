@@ -11,6 +11,7 @@
         "@solidrt/router": "0.0.78",
       },
       "devDependencies": {
+        "@solidrt/android-arm64-v8a": "0.0.78",
         "@solidrt/cli": "0.0.78",
         "@solidrt/flux-types": "0.0.78",
         "@solidrt/test": "0.0.78",
@@ -102,6 +103,8 @@
     "@solidjs/universal": ["@solidjs/universal@2.0.0-rc.14", "", { "peerDependencies": { "solid-js": "^2.0.0-rc.14" } }, "sha512-FEcstwKs/2fW5G0QSWUsDZaSTlGhpCnLUVvZSOpNEdXZpL8yDZ7oq+AYetHmrW7HIaQa/ZD6jal7xDHJ3MJa5w=="],
 
     "@solidrt/3d": ["@solidrt/3d@0.0.78", "", { "peerDependencies": { "@solidjs/signals": "2.0.0-rc.14", "@solidrt/core": "0.0.78" } }, "sha512-M8d8J8XQglZtxTYqFPH7QmUDA8vzplAas5Mou45zBg6GL/bwp6Z5Y0/PW1ha1Lbuv/GcLoHlSY7mXggVvuP00Q=="],
+
+    "@solidrt/android-arm64-v8a": ["@solidrt/android-arm64-v8a@0.0.78", "", {}, "sha512-0YD2u09CfRSFf0KrpwvJqgyA93EaeOzKHYrnA/KuUxtrSH4Wc2e27uL5K6gz5P5FXEaQ+ClRy6xnMnbONrivpA=="],
 
     "@solidrt/cli": ["@solidrt/cli@0.0.78", "", { "dependencies": { "@babel/core": "^7.0.0", "@babel/plugin-syntax-jsx": "^7.0.0", "@babel/preset-typescript": "^7.0.0", "@clack/prompts": "^1.7.0", "@jridgewell/remapping": "^2.3.0", "@jridgewell/trace-mapping": "^0.3.25", "@modelcontextprotocol/sdk": "^1.29.0", "@solidjs/babel-plugin": "2.0.0-rc.14", "bonjour-service": "^1.4.0", "qrcode-generator": "^2.0.4", "zod": "^4.4.3" }, "optionalDependencies": { "@solidrt/darwin-arm64": "0.0.78", "@solidrt/linux-arm64-gnu": "0.0.78", "@solidrt/linux-x64-gnu": "0.0.78", "@solidrt/win32-x64-msvc": "0.0.78" }, "peerDependencies": { "typescript": "^7" }, "bin": { "sol": "bin/sol" } }, "sha512-rn9VOidaN8YkCkifx4RnQ7o+1Apbv9qm8J9ZcIF7DPU1xAn8B+7e/j0vJ0xQ+dfiv46JWULE12ilaVb/B1/FxA=="],
 

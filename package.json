@@ -41,6 +41,7 @@
     "@solidrt/router": "0.0.78"
   },
   "devDependencies": {
+    "@solidrt/android-arm64-v8a": "0.0.78",
     "@solidrt/cli": "0.0.78",
     "@solidrt/flux-types": "0.0.78",
     "@solidrt/test": "0.0.78",

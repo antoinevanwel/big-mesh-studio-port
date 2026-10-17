@@ -8,16 +8,20 @@ upstream commit it matches and what became of each upstream change since;
 
 ## Download
 
-[Linux x86-64](https://github.com/antoinevanwel/big-mesh-studio-port/releases/latest/download/sdf-modeller-linux-x64.tar.gz),
+[Linux x86-64](https://github.com/antoinevanwel/big-mesh-studio-port/releases/latest/download/sdf-modeller-linux-x64.tar.xz),
 the latest release. Extract it and run the app inside:
 
 ```sh
-tar xzf sdf-modeller-linux-x64.tar.gz
+tar xf sdf-modeller-linux-x64.tar.xz
 ./sdf-modeller-linux-x64/sdf-modeller
 ```
 
 It needs glibc and the system's OpenGL ES (EGL) drivers. The folder also
 holds the third-party notices of the SolidRT runtime the app is built on.
+
+[Android (arm64)](https://github.com/antoinevanwel/big-mesh-studio-port/releases/latest/download/sdf-modeller-arm64-v8a.apk),
+for current phones and tablets: open it on the device to install (allow
+installs from your browser or file manager when asked).
 
 ## Run
 

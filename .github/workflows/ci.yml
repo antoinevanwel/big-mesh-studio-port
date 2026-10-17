@@ -1,6 +1,6 @@
 # Typecheck and test on every push and pull request; on a v* tag, also pack
-# the Linux executables and publish them as a GitHub release (the README's
-# download links point at the latest one).
+# the Linux executable and the Android APK and publish them as a GitHub
+# release (the README's download links point at the latest one).
 name: CI
 
 on:
@@ -50,11 +50,21 @@ jobs:
       - name: Add license notices
         run: cp node_modules/@solidrt/linux-x64-gnu/THIRD-PARTY-NOTICES.txt dist/sdf-modeller-linux-x64/
       - name: Archive
-        run: tar -czf sdf-modeller-linux-x64.tar.gz -C dist sdf-modeller-linux-x64
+        run: XZ_OPT=-9e tar -cJf sdf-modeller-linux-x64.tar.xz -C dist sdf-modeller-linux-x64
       - uses: actions/upload-artifact@v7
         with:
           name: linux-x64
-          path: sdf-modeller-linux-x64.tar.gz
+          path: sdf-modeller-linux-x64.tar.xz
+          if-no-files-found: error
+      # The APK is patched from the @solidrt/android-arm64-v8a runner, so any
+      # runner packs it; sol pack names it by its ABI. It is signed with the
+      # shared development key: fine for sideloading, not for a store.
+      - name: Pack APK
+        run: bun run sol pack --apk -o dist/sdf-modeller.apk
+      - uses: actions/upload-artifact@v7
+        with:
+          name: android-arm64-v8a
+          path: dist/sdf-modeller-arm64-v8a.apk
           if-no-files-found: error
 
   release:
