@@ -1,11 +1,11 @@
-// "Your files": the document's name and Save, New, the export for a 3D
-// printer, and the models kept in this app's storage as cards to open.
-// Upstream opens and saves through the browser's file pickers; there are
-// none here, so the cards are the open dialog (see SOLIDRT-FEEDBACK.md). Laid out.
+// "Your files": the document, New, Open and Save through the platform's file
+// dialogs, the export for a 3D printer, and the files opened before as cards
+// to open again. Laid out.
 
-import { createSignal, For, Show } from "@solidrt/core"
-import { Button, Card, Divider, ProgressBar, Pressable, ScrollView, Text, TextInput, View } from "@solidrt/components"
-import type { SavedModel } from "../file/library"
+import { For, Show } from "@solidrt/core"
+import { Button, Card, Divider, ProgressBar, Pressable, ScrollView, Text, View } from "@solidrt/components"
+import { homeName, type Home } from "../file/home"
+import type { RecentFile } from "../file/recent-files"
 import { PRINT_RESOLUTIONS } from "../print/print"
 import { ACCENT, QUIET } from "../theme"
 import { Heading, NumberField } from "./bits"
@@ -25,9 +25,11 @@ export const ago = (at: number, now: number = Date.now()): string => {
 }
 
 export interface FilesPanelProps {
-  readonly name: string | undefined
+  readonly home: Home
   readonly parts: number
-  readonly models: readonly SavedModel[]
+  readonly recent: readonly RecentFile[]
+  /** The platform shows file dialogs; without them Save writes into the app's storage. */
+  readonly showsDialogs: boolean
   readonly draftAt: number | undefined
   /** What the viewport's mesh says about printing it. */
   readonly readout: string
@@ -39,14 +41,20 @@ export interface FilesPanelProps {
   readonly estimate: string
   /** How far an export's meshing has got (0..1), while one runs. */
   readonly printing: number | undefined
+  /** The name and size of a built print waiting to be saved, or undefined. */
+  readonly builtFile: string | undefined
   readonly notice: string | undefined
-  readonly exported: string | undefined
+  /** Where the last file went when there was no dialog to ask, or undefined. */
+  readonly written: string | undefined
   readonly busy: boolean
   readonly onNew: () => void
-  readonly onSave: (name: string) => void
-  readonly onOpen: (name: string) => void
-  readonly onDelete: (name: string) => void
+  readonly onOpen: () => void
+  readonly onSave: () => void
+  readonly onOpenRecent: (file: RecentFile) => void
+  readonly onForgetRecent: (path: string) => void
+  /** Meshes and encodes the print, holding it for onSavePrint. */
   readonly onExport: () => void
+  readonly onSavePrint: () => void
   readonly onHeight: (mm: number) => void
   readonly onFilaments: (count: number) => void
   readonly onResolution: (voxelSize: number) => void
@@ -54,17 +62,13 @@ export interface FilesPanelProps {
 }
 
 export function FilesPanel(props: FilesPanelProps) {
-  let [typed, setTyped] = createSignal<string | undefined>()
-  let [doomed, setDoomed] = createSignal<string | undefined>()
-  let saveName = () => typed() ?? props.name ?? "model"
-
   return (
     <View layout={{ gap: 12, flexGrow: 1, minHeight: 0 }}>
       <View layout={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
         <View layout={{ flexGrow: 1, minWidth: 0 }}>
-          <Text variant="title">{props.name ?? "Untitled model"}</Text>
+          <Text variant="title">{homeName(props.home)}</Text>
           <Text variant="caption" muted>
-            {props.name === undefined ? "not saved anywhere yet" : `${props.parts} part${props.parts === 1 ? "" : "s"}`}
+            {props.home.kind === "nowhere" ? "not saved anywhere yet" : `${props.parts} part${props.parts === 1 ? "" : "s"}`}
           </Text>
         </View>
         <Button variant="ghost" onPress={props.onClose}>
@@ -73,24 +77,20 @@ export function FilesPanel(props: FilesPanelProps) {
       </View>
 
       <View layout={{ flexDirection: "row", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-        <TextInput
-          value={saveName()}
-          onInput={setTyped}
-          onSubmit={() => props.onSave(saveName())}
-          placeholder="name"
-          hints={{ capitalize: "none", autocorrect: false }}
-          layout={{ flexGrow: 1, minWidth: 140 }}
-        />
-        <Button disabled={props.busy} onPress={() => props.onSave(saveName())}>
-          Save
-        </Button>
         <Button variant="secondary" disabled={props.busy} onPress={props.onNew}>
           New
+        </Button>
+        <Button variant="secondary" disabled={props.busy} onPress={props.onOpen}>
+          Open
+        </Button>
+        <Button disabled={props.busy} onPress={props.onSave}>
+          Save
         </Button>
       </View>
 
       <Show when={props.notice}>{notice => <Text color="danger">{notice()}</Text>}</Show>
       <Show when={props.draftAt}>{at => <Text variant="caption" muted>{`draft kept in this app ${ago(at())}`}</Text>}</Show>
+      <Show when={props.written}>{path => <Text variant="caption" muted>{`written to ${path()}`}</Text>}</Show>
 
       <Card title="Print">
         <View layout={{ flexDirection: "row", gap: 12, flexWrap: "wrap" }}>
@@ -121,46 +121,53 @@ export function FilesPanel(props: FilesPanelProps) {
         <Show when={props.printing !== undefined}>
           <ProgressBar value={props.printing} />
         </Show>
+        {/* One button, two steps, as upstream's: the first meshes and holds
+            the file, the second (naming it and its size) asks where it goes. */}
         <View layout={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
-          <Button variant="secondary" disabled={props.busy} onPress={props.onExport}>
-            Export .3mf
+          <Button variant="secondary" disabled={props.busy} onPress={() => (props.builtFile === undefined ? props.onExport() : props.onSavePrint())}>
+            {props.builtFile === undefined ? "Export .3mf" : `Save ${props.builtFile}`}
           </Button>
-          <Show when={props.exported}>{path => <Text variant="caption" muted layout={{ flexShrink: 1 }}>{`written to ${path()}`}</Text>}</Show>
         </View>
       </Card>
 
       <Divider />
-      <Heading aside={String(props.models.length)}>Your models</Heading>
+      <Heading aside={String(props.recent.length)}>Opened before</Heading>
       <ScrollView layout={{ flexGrow: 1, minHeight: 120 }}>
-        <Show when={props.models.length > 0} fallback={<Text muted>No saved models yet. Save one and it will be here.</Text>}>
+        <Show
+          when={props.recent.length > 0}
+          fallback={
+            <Text muted>
+              {props.showsDialogs
+                ? "No files opened yet. Open one and it will be here."
+                : "This device shows no file dialog, so Save keeps models in this app, and they are listed here."}
+            </Text>
+          }
+        >
           <View layout={{ flexDirection: "row", flexWrap: "wrap", gap: 8, paddingBottom: 8 }}>
-            <For each={props.models}>
-              {model => (
+            <For each={props.recent}>
+              {entry => (
                 <View layout={{ width: 150, gap: 4 }}>
-                  <Pressable disabled={props.busy} onPress={() => props.onOpen(model.name)} layout={{ height: 96, alignItems: "center", justifyContent: "center" }}>
+                  <Pressable disabled={props.busy} onPress={() => props.onOpenRecent(entry)} layout={{ height: 96, alignItems: "center", justifyContent: "center" }}>
                     {state => (
                       <>
                         <d-rect color={state.pressed ? "#2a2a32" : state.hovered ? "#22222a" : "#1b1b21"} radius={8} />
-                        <d-rect color={model.name === props.name ? ACCENT : "rgba(255,255,255,0.12)"} drawStyle="stroke" strokeWidth={1} radius={8} />
-                        <Text variant="heading">{String(model.parts)}</Text>
-                        <Text variant="caption" style={{ color: QUIET }}>{model.parts === 1 ? "part" : "parts"}</Text>
+                        <d-rect
+                          color={props.home.kind === "file" && props.home.path === entry.path ? ACCENT : "rgba(255,255,255,0.12)"}
+                          drawStyle="stroke"
+                          strokeWidth={1}
+                          radius={8}
+                        />
+                        <Text variant="heading">{String(entry.parts)}</Text>
+                        <Text variant="caption" style={{ color: QUIET }}>{entry.parts === 1 ? "part" : "parts"}</Text>
                       </>
                     )}
                   </Pressable>
-                  <Text layout={{ maxWidth: 150 }}>{model.name}</Text>
+                  <Text layout={{ maxWidth: 150 }}>{entry.name}</Text>
                   <View layout={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}>
-                    <Text variant="caption" muted>{model.savedAt === undefined ? "" : ago(model.savedAt)}</Text>
-                    <Button
-                      variant={doomed() === model.name ? "danger" : "ghost"}
-                      disabled={props.busy}
-                      layout={{ paddingLeft: 8, paddingRight: 8 }}
-                      onPress={() => {
-                        if (doomed() !== model.name) return setDoomed(model.name)
-                        setDoomed(undefined)
-                        props.onDelete(model.name)
-                      }}
-                    >
-                      {doomed() === model.name ? "Delete?" : "Delete"}
+                    <Text variant="caption" muted>{ago(entry.lastOpenedAt)}</Text>
+                    {/* Forgetting drops it from this list; the file itself is untouched. */}
+                    <Button variant="ghost" disabled={props.busy} layout={{ paddingLeft: 8, paddingRight: 8 }} onPress={() => props.onForgetRecent(entry.path)}>
+                      Forget
                     </Button>
                   </View>
                 </View>

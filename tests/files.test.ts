@@ -1,4 +1,7 @@
 import { test, expect } from "flux:test"
+import { dir, file } from "flux:fs"
+import { writeModelInStorage } from "../src/file/library"
+import { forgetFile, listRecentFiles, rememberFile } from "../src/file/recent-files"
 import { readProject, writeProject } from "../src/file/project"
 import { deserialiseOperations, serialiseOperations } from "../src/file/serialise"
 import { writeZip, ZipReader } from "../src/file/zip"
@@ -140,4 +143,41 @@ test("the print estimate says what a resolution costs, and when the cap holds it
   expect(big.samples).toBe(PRINT_MAX_SAMPLES_PER_AXIS)
   expect(big.capped).toBe(true)
   expect(describePrintEstimate(big)).toContain(`capped at ${PRINT_MAX_SAMPLES_PER_AXIS}`)
+})
+
+// The storage the next two tests use is shared by this file's tests: start
+// and end with none of it.
+const clearStorage = async () => {
+  for (let folder of ["models", "exports"]) {
+    if (!(await dir(folder).exists())) continue
+    for (let entry of await dir(folder).entries()) if (entry.type === "file") await file(entry.path).remove()
+  }
+  if (await file("recent.json").exists()) await file("recent.json").remove()
+}
+
+test("without a dialog, Save never writes over an earlier model", async () => {
+  await clearStorage()
+  let project = await writeProject({ parts: [], palette: [], view: { mode: "marching-cubes", resolution: 0.25 } })
+  let first = await writeModelInStorage("model.sdfmod", project)
+  let second = await writeModelInStorage("model.sdfmod", project)
+  expect([first.path, second.path]).toEqual(["models/model.sdfmod", "models/model (1).sdfmod"])
+  expect(second.name).toBe("model (1).sdfmod")
+  await clearStorage()
+})
+
+test("the models the port kept before it had dialogs become the remembered list", async () => {
+  await clearStorage()
+  let one = await writeProject({ parts: [placedPart("ball", { type: "Sphere", radius: 0.5 }, { x: 0, y: 0, z: 0 })], palette: [], view: { mode: "marching-cubes", resolution: 0.25 } })
+  await dir("models").create()
+  await file("models/ball.sdfmod").write(one)
+  let seeded = await listRecentFiles()
+  expect(seeded.map(entry => [entry.path, entry.name, entry.parts])).toEqual([["models/ball.sdfmod", "ball.sdfmod", 1]])
+  // Seeded once: a forgotten model stays forgotten, and stays on disk.
+  await forgetFile("models/ball.sdfmod")
+  expect(await listRecentFiles()).toEqual([])
+  expect(await file("models/ball.sdfmod").exists()).toBe(true)
+  await rememberFile("elsewhere/ball.sdfmod", "ball.sdfmod", 1)
+  await rememberFile("elsewhere/ball.sdfmod", "ball.sdfmod", 2)
+  expect((await listRecentFiles()).map(entry => entry.parts)).toEqual([2])
+  await clearStorage()
 })

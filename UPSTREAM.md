@@ -76,7 +76,10 @@ became tests/*.test.ts(x).
 | apps/sdf-modeller/src/model/part.ts | src/model/part.ts |
 | apps/sdf-modeller/src/model/mesh-model.ts, packages/meshing/src/model-mesh.ts | src/mesh/mesh-model.ts, src/mesher.ts (the isolate) |
 | apps/sdf-modeller/src/file/project.ts, project-file.ts, packages/csg/src/model-file.ts | src/file/project.ts, src/file/zip.ts (jszip's job) |
-| apps/sdf-modeller/src/file/{save-file,autosave,database,recent-files,home}.ts | src/file/library.ts (app storage instead of IndexedDB and browser pickers) |
+| apps/sdf-modeller/src/file/save-file.ts | src/file/save-file.ts (`flux:dialog`) |
+| apps/sdf-modeller/src/file/home.ts | src/file/home.ts (a path where upstream holds a handle) |
+| apps/sdf-modeller/src/file/recent-files.ts | src/file/recent-files.ts (paths in recent.json in app storage, where upstream keeps handles in IndexedDB; a path needs no permission) |
+| apps/sdf-modeller/src/file/{autosave,database}.ts | src/file/library.ts (the draft in app storage; the debounce in src/routes/modeller.tsx) |
 | apps/sdf-modeller/src/print/* (three-mf, export-model, print-problem, print-budget, print-mesh, quantise, stand) | src/print/print.ts (no thumbnail) |
 | apps/sdf-modeller/src/print/print-worker.ts, print.worker.ts, print-mesh-client.ts | src/mesher.ts (`exportThreeMf`, an isolate stream) |
 | apps/sdf-modeller/src/ui/parts-panel.tsx | src/ui/parts-panel.tsx |
@@ -125,7 +128,7 @@ covers them.
 
 | What | Reason | Why, and how to revert |
 | --- | --- | --- |
-| Projects live in a `models/` folder in app storage, listed in the Files dialog; exports land in `exports/` | SolidRT | No system open/save dialog (SOLIDRT-FEEDBACK.md, "No system file picker or save dialog"). Revert: open and save through the platform's dialog once there is one, as upstream does with the File System Access API. A print is therefore written in one press; upstream builds the file on the first press and asks where to save it on a second, because a browser's file picker needs a fresh gesture. |
+| Where the platform shows no file dialog (`flux:dialog` rejects with NotSupportedError: iOS, a Linux session without the portal or zenity, an Android without a document picker), Save and the print's Save write into the app's storage (`models/`, `exports/`, under a free name) and say where, and Open says to use the list | SolidRT | Upstream downloads there, and still opens through a plain file input; without a dialog nothing outside the app's storage can be reached, so the saved models are found again through the remembered list. SOLIDRT-FEEDBACK.md, "No system file picker or save dialog" (resolved in 0.0.78 except on these platforms). Revert: drop the fallback (library.ts's `write*InStorage`, the `UNSUPPORTED` branches in modeller.tsx) once every target platform has a dialog. |
 | Number fields ask for a plain keyboard (no `type: "number"` hint) | SolidRT | The hint does not say whether its keypad has a minus key (SOLIDRT-FEEDBACK.md, "The `number` text-input hint..."). Upstream uses plain text too, for the same reason on the web, so behaviour matches. Revert: none needed unless upstream goes back to a numeric keypad. |
 | The orbit camera's pointer feed is forwarded by hand from the scene's root listener | SolidRT | No hook to decline a press on `<Scene pointer>` (SOLIDRT-FEEDBACK.md, "Gating a camera's pointer feed per press is undocumented"). Behaviour matches upstream. Revert: hand the feed to `<Scene pointer>` with a filter once one exists. |
 | No thumbnail in an exported 3MF | Port | Not ported yet. SolidRT can do it (`readTexture` of the scene's texture, `encodeImage` to PNG). |
@@ -199,7 +202,7 @@ Every tracked upstream commit after the original base, in upstream order.
 Status: `pending` (to port), `ported`, `covered` (the port already does
 this its own way), `skipped` (not wanted, or web-only).
 
-Triaged 2026-10-14 against upstream `f353fa1` (its last commit touches no tracked path).
+Triaged 2026-10-17 against upstream `ba86d41` (its last commit touches no tracked path).
 
 | Commit | Upstream | Status | For the port |
 | --- | --- | --- | --- |
@@ -232,6 +235,8 @@ Triaged 2026-10-14 against upstream `f353fa1` (its last commit touches no tracke
 | 25eb290 | Windows-only fix | skipped | A WebGL alpha issue; the port packs opacity into that byte on purpose. |
 | 825d887 | prettier | skipped | Formatting. |
 | fa5c16e | spacescape move and rotate handles | skipped | Spacescape-only; it touches docs/adr (ADR 0001's table, ADR 0051) to say the level editor took this app's handles. |
+| 1f3cd3f | `Polygon` primitive, format version 5 (spacescape floors, ADR 0052, 0053) | pending | An outline in XZ extruded along Y by `len`, whose point count is written in the file: `sdPolygon2D`/`sdPolygonPrism`, `polygonHalfExtents`, `PrimitiveParameter` as a union with a variable-arity case (`isEditableParameter`), `PALETTE_NAMES` (the parts panel's list, without Polygon), a unit-square `defaultShape`, `radius()` clamping non-finite sizes, and serialise.ts reading and writing version 5. The modeller offers no polygon, but opens and draws a file holding one. Touches src/model/primitives.ts, src/model/field.ts, src/file/serialise.ts, src/ui/parts-panel.tsx and the transform panel. |
+| d24e4a5 | backwards compatibility: versions 3 and 4 read, lowest version written | pending | Port with 1f3cd3f: `READABLE_VERSIONS` {4, 3}, version 3's absent material byte, a polygon refused in an older file, and a model without a polygon written at version 4 (so a saved project opens in a build from before the polygon). The port reads and writes version 4 only today. |
 
 ### Painting, as ported
 
@@ -276,6 +281,34 @@ Triaged 2026-10-14 against upstream `f353fa1` (its last commit touches no tracke
 How close the port has been to upstream over time, newest first. One
 entry per batch of porting work; the ledger holds what each upstream
 commit means, so an entry names commits by hash only.
+
+### 2026-10-17: system file dialogs
+
+- Pin unchanged (`fa5c16e`); nothing ported from upstream's ledger.
+- Open and Save go through the platform's dialogs (`flux:dialog`), as
+  upstream's go through the File System Access API: the document has a
+  home (a path), Save writes back to it and asks only for a document that
+  has none, Open takes any file (no type filter, as upstream), and the
+  Files dialog lists the twelve files opened or written last, each
+  forgotten without touching the file. The print's export is upstream's
+  two presses again: the first meshes and holds the file, the second
+  (naming it and its size) asks where it goes; changing a print setting
+  or closing the dialog drops the held file.
+- Deviations: "projects live in `models/`" replaced by the no-dialog
+  fallback row (SolidRT), which applies only where the platform shows no
+  dialog.
+- Port-only: the models the port kept in `models/` before this are
+  listed as remembered files on the first start, so none is lost from
+  sight. The name field and Delete button of the old library are gone
+  (upstream has neither).
+
+### 2026-10-17: SolidRT 0.0.78, triage to d24e4a5
+
+- Pin stays at `fa5c16e`. Pending: 1f3cd3f, d24e4a5 (the polygon and
+  the file format's backwards compatibility).
+- SolidRT 0.0.76 → 0.0.78, no code change. It adds system file dialogs
+  (`flux:dialog`), which closes the gap behind the "projects live in
+  `models/`" deviation; the other SolidRT rows are unchanged.
 
 ### 2026-10-14: painting, SolidRT 0.0.76
 

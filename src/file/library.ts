@@ -1,72 +1,14 @@
-// Where documents live: the app's own storage folder. There is no system
-// open or save dialog here (SOLIDRT-FEEDBACK.md), so projects are kept in
-// models/ under storage and listed in the Files dialog, the autosaved draft
-// is one file beside them, and prints are written to exports/.
+// What lives in the app's own storage folder: the autosaved draft (upstream
+// keeps it in IndexedDB), and, where the platform shows no file dialog,
+// the files Save and Export write in place of upstream's download: models/
+// and exports/, under a name made free the way a download folder does.
 
 import { dir, file, realpath } from "flux:fs"
-import { PROJECT_EXTENSION } from "./project"
-import { ZipReader } from "./zip"
+import { MODELS } from "./recent-files"
 
-const MODELS = "models"
 const EXPORTS = "exports"
 const DRAFT = "draft.sdfmod"
 const DRAFT_AT = "draft.json"
-
-export interface SavedModel {
-  /** The document name: the file name without its extension. */
-  readonly name: string
-  readonly parts: number
-  /** When it was last written, ms since the epoch, or undefined when unknown. */
-  readonly savedAt: number | undefined
-}
-
-/** A name safe to use as a file name; empty when nothing usable was typed. */
-export const cleanName = (typed: string): string =>
-  typed
-    .replace(/\.sdfmod$/i, "")
-    .replace(/[^\p{L}\p{N} _.-]/gu, "")
-    .replace(/\s+/g, " ")
-    .trim()
-    .slice(0, 64)
-
-const pathOf = (name: string): string => `${MODELS}/${name}${PROJECT_EXTENSION}`
-
-const partsIn = async (bytes: Uint8Array): Promise<number> => {
-  try {
-    let manifest = JSON.parse((await new ZipReader(bytes).textOf("manifest.json")) ?? "{}")
-    return Array.isArray(manifest.ids) ? manifest.ids.length : 0
-  } catch {
-    return 0
-  }
-}
-
-/** Every saved model, most recently written first. */
-export const listModels = async (): Promise<SavedModel[]> => {
-  let folder = dir(MODELS)
-  if (!(await folder.exists())) return []
-  let found: SavedModel[] = []
-  for (let entry of await folder.entries()) {
-    if (entry.type !== "file" || !entry.name.endsWith(PROJECT_EXTENSION)) continue
-    let handle = file(`${MODELS}/${entry.name}`)
-    let [bytes, stat] = await Promise.all([handle.bytes(), handle.stat()])
-    found.push({ name: entry.name.slice(0, -PROJECT_EXTENSION.length), parts: await partsIn(bytes), savedAt: stat.mtime })
-  }
-  return found.sort((a, b) => (b.savedAt ?? 0) - (a.savedAt ?? 0) || a.name.localeCompare(b.name))
-}
-
-export const readModel = (name: string): Promise<Uint8Array> => file(pathOf(name)).bytes()
-
-export const modelExists = (name: string): Promise<boolean> => file(pathOf(name)).exists()
-
-export const saveModel = async (name: string, bytes: Uint8Array): Promise<void> => {
-  await dir(MODELS).create()
-  // Written beside and renamed over, so a failed write never leaves half a model.
-  let temporary = file(`${pathOf(name)}.part`)
-  await temporary.write(bytes)
-  await temporary.rename(pathOf(name))
-}
-
-export const deleteModel = (name: string): Promise<void> => file(pathOf(name)).remove()
 
 export interface Draft {
   readonly bytes: Uint8Array
@@ -84,7 +26,7 @@ export const readDraft = async (): Promise<Draft | undefined> => {
 }
 
 export const saveDraft = async (bytes: Uint8Array, at: number): Promise<void> => {
-  await file(DRAFT).write(bytes)
+  await file(DRAFT).write(bytes, { atomic: true })
   await file(DRAFT_AT).write(JSON.stringify({ at }))
 }
 
@@ -93,10 +35,24 @@ export const clearDraft = async (): Promise<void> => {
   await file(DRAFT_AT).remove()
 }
 
-/** Writes a print and returns where it landed, as the OS spells the path. */
-export const writeExport = async (name: string, bytes: Uint8Array): Promise<string> => {
-  await dir(EXPORTS).create()
-  let path = `${EXPORTS}/${name}.3mf`
-  await file(path).write(bytes)
-  return realpath(path)
+// "model.sdfmod", else "model (1).sdfmod", ...: never over an earlier file.
+const freePath = async (folder: string, name: string): Promise<string> => {
+  let dot = name.lastIndexOf(".")
+  let [stem, extension] = dot > 0 ? [name.slice(0, dot), name.slice(dot)] : [name, ""]
+  for (let n = 0; ; n++) {
+    let path = `${folder}/${n === 0 ? stem : `${stem} (${n})`}${extension}`
+    if (!(await file(path).exists())) return path
+  }
 }
+
+/** Writes into folder/ under a free name; returns where, as `file()` and the OS spell it. */
+const writeInStorage = async (folder: string, name: string, bytes: Uint8Array): Promise<{ path: string; name: string; shown: string }> => {
+  await dir(folder).create()
+  let path = await freePath(folder, name)
+  await file(path).write(bytes, { atomic: true })
+  return { path, name: path.slice(folder.length + 1), shown: await realpath(path) }
+}
+
+export const writeModelInStorage = (name: string, bytes: Uint8Array) => writeInStorage(MODELS, name, bytes)
+
+export const writeExportInStorage = (name: string, bytes: Uint8Array) => writeInStorage(EXPORTS, name, bytes)

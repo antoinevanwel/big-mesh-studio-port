@@ -82,16 +82,54 @@ test("a difference is reported in the panel and keeps the mesh closed", async ap
   expect(root.find({ text: /watertight/ }).visible).toBe(true)
 })
 
-test("the files dialog saves the model and lists it", async app => {
+test("Save asks where the model goes, then writes back there", async app => {
   let root = await start(app)
   await app.tap(root.find({ text: "Files" }))
   await rest(app)
+  let asked = app.dialog({ files: ["duck.sdfmod"] })
   await app.tap(root.find({ text: "Save" }))
   await rest(app)
+  expect(await asked).toMatchObject({ kind: "saveFile", suggestedName: "model.sdfmod", types: [{ extensions: ["sdfmod"] }] })
+  let first = await file("duck.sdfmod").stat()
+  // The name heads the dialog and labels the card of the file just written.
+  expect(root.findAll({ text: "duck.sdfmod" }).length).toBe(2)
   expect(root.find({ text: "1 part" }).visible).toBe(true)
-  // The name heads the dialog, fills the name field and labels the new card.
-  expect(root.findAll({ text: "model" }).length).toBe(3)
-  expect(root.find({ text: "Delete" }).visible).toBe(true)
+  expect(root.find({ text: "Forget" }).visible).toBe(true)
+  // A second Save writes back without asking: no answer is queued.
+  await app.tap(root.find({ text: "Save" }))
+  await rest(app)
+  expect(root.find({ text: /could not|failed/ }).exists).toBe(false)
+  expect((await file("duck.sdfmod").stat()).size).toBe(first.size)
+})
+
+test("Open loads the picked file, and the list opens it again", async app => {
+  let root = await start(app)
+  await app.tap(root.find({ text: "Duplicate" }))
+  await rest(app)
+  await app.tap(root.find({ text: "Files" }))
+  await rest(app)
+  let saved = app.dialog({ files: ["two.sdfmod"] })
+  await app.tap(root.find({ text: "Save" }))
+  await rest(app)
+  await saved
+  await app.tap(root.find({ text: "New" }))
+  await rest(app)
+  expect(root.find({ text: "not saved anywhere yet" }).visible).toBe(true)
+  let opened = app.dialog({ files: ["two.sdfmod"] })
+  await app.tap(root.find({ text: "Open" }))
+  await rest(app)
+  expect(await opened).toMatchObject({ kind: "openFiles", multiple: false, types: [] })
+  expect(root.find({ text: /^2 parts · / }).visible).toBe(true)
+  // Back to one part, then the remembered card brings the file back.
+  await app.tap(root.find({ text: "Undo" }))
+  await rest(app)
+  await app.tap(root.find({ text: "Files" }))
+  await rest(app)
+  // The card's tile (its part count) is what opens it; the title names the file too.
+  expect(root.findAll({ text: "two.sdfmod" }).length).toBe(2)
+  await app.tap(root.find({ text: "parts" }))
+  await rest(app)
+  expect(root.find({ text: /^2 parts · / }).visible).toBe(true)
 })
 
 test("an export writes a 3mf whose model is deflated", async app => {
@@ -99,9 +137,14 @@ test("an export writes a 3mf whose model is deflated", async app => {
   await app.tap(root.find({ text: "Files" }))
   await rest(app)
   await app.tap(root.find({ text: "Export .3mf" }))
-  await restUntil(app, () => root.find({ text: /^written to / }).exists)
-  expect(root.find({ text: /^written to .*model\.3mf$/ }).visible).toBe(true)
-  let bytes = await file("exports/model.3mf").bytes()
+  // The first press meshes and holds the file; the second asks where it goes.
+  await restUntil(app, () => root.find({ text: /^Save model\.3mf · \d+ MB$/ }).exists)
+  let asked = app.dialog({ files: ["print.3mf"] })
+  await app.tap(root.find({ text: /^Save model\.3mf/ }))
+  await rest(app)
+  expect(await asked).toMatchObject({ kind: "saveFile", suggestedName: "model.3mf" })
+  expect(root.find({ text: "Export .3mf" }).visible).toBe(true)
+  let bytes = await file("print.3mf").bytes()
   let xml = (await new ZipReader(bytes).textOf("3D/3dmodel.model"))!
   expect(xml).toContain('unit="millimeter"')
   expect(bytes.length).toBeLessThan(xml.length / 3)
@@ -165,9 +208,10 @@ test("a paint stroke lands on the model, as one undo step, and survives a save",
   expect(dabs).toBeGreaterThan(1)
   await app.tap(root.find({ text: "Files" }))
   await rest(app)
+  app.dialog({ files: ["painted.sdfmod"] })
   await app.tap(root.find({ text: "Save" }))
   await rest(app)
-  let saved = await new ZipReader(await file("models/model.sdfmod").bytes()).textOf("manifest.json")
+  let saved = await new ZipReader(await file("painted.sdfmod").bytes()).textOf("manifest.json")
   expect(JSON.parse(saved!).paint).toEqual({ dabs, strokes: 1 })
   await app.tap(root.find({ text: "Close" }))
   await rest(app)

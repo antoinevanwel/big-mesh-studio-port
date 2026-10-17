@@ -21,9 +21,13 @@
 
 import { capabilities, createEffect, createMemo, createSignal, Match, onSettled, pct, Show, Switch, textInputActive, windowSize, type KeyEvent } from "@solidrt/core"
 import { Button, Card, Modal, ScrollView, SegmentedControl, Slider, Text, View } from "@solidrt/components"
+import { file } from "flux:fs"
 import { isolate } from "flux:isolate"
-import { cleanName, clearDraft, deleteModel, listModels, modelExists, readDraft, readModel, saveDraft, saveModel, writeExport, type SavedModel } from "../file/library"
-import { readProject, writeProject, type Project } from "../file/project"
+import { homeName, NOWHERE, type Home } from "../file/home"
+import { clearDraft, readDraft, saveDraft, writeExportInStorage, writeModelInStorage } from "../file/library"
+import { PROJECT_EXTENSION, readProject, writeProject, type Project } from "../file/project"
+import { forgetFile, listRecentFiles, readThrough, rememberFile, type RecentFile } from "../file/recent-files"
+import { chooseFileToRead, choosePlaceToWrite, dialogsMissing, UNSUPPORTED } from "../file/save-file"
 import { budgetFor, DEFAULT_MESH_MODE, DEFAULT_RESOLUTION, MESH_MODES, meshRegion, RESOLUTIONS, type MeshMode, type Resolution } from "../mesh/mesh-model"
 import { describeReport } from "../mesh/report"
 import type * as Mesher from "../mesher"
@@ -72,6 +76,10 @@ type Frame = { centre: Vec3; size: number }
 
 const message = (reason: unknown): string => (reason instanceof Error ? reason.message : String(reason))
 
+const DEFAULT_PROJECT_NAME = `model${PROJECT_EXTENSION}`
+const PROJECT_CHOICE = { description: "SDF model", extension: PROJECT_EXTENSION.slice(1) }
+const THREE_MF_CHOICE = { description: "3D print model", extension: "3mf" }
+
 export function Modeller() {
   let store = createModelStore(newModel())
   let palette = createPalette(STARTER_PALETTE)
@@ -88,24 +96,31 @@ export function Modeller() {
     equals: (a, b) => a === b || (a !== undefined && b !== undefined && a.size === b.size && a.centre.x === b.centre.x && a.centre.y === b.centre.y && a.centre.z === b.centre.z),
   })
 
-  // The document's home in models/ (undefined: never saved) and the files dialog.
-  let [home, setHome] = createSignal<string | undefined>()
+  // Where the document lives (see file/home.ts) and the files dialog.
+  let [home, setHome] = createSignal<Home>(NOWHERE)
   let [filesOpen, setFilesOpen] = createSignal(false)
-  let [models, setModels] = createSignal<readonly SavedModel[]>([])
+  let [recent, setRecent] = createSignal<readonly RecentFile[]>([])
   let [draftAt, setDraftAt] = createSignal<number | undefined>()
   let [busy, setBusy] = createSignal(false)
   let [notice, setNotice] = createSignal<string | undefined>()
-  let [exported, setExported] = createSignal<string | undefined>()
+  // Where a file went without a dialog (the app's storage), as the OS spells it.
+  let [written, setWritten] = createSignal<string | undefined>()
   let [heightMm, setHeightMm] = createSignal(DEFAULT_HEIGHT_MM)
   let [filaments, setFilaments] = createSignal(DEFAULT_MAX_COLOURS)
   let [printResolution, setPrintResolution] = createSignal(DEFAULT_PRINT_VOXEL_SIZE)
   let [printing, setPrinting] = createSignal<number | undefined>()
+  // A built print waiting for the second press that saves it, as upstream's:
+  // meshing takes seconds, and the save dialog opens on a press of its own.
+  let [printFile, setPrintFile] = createSignal<{ readonly bytes: Uint8Array; readonly name: string } | undefined>()
+  let printFileLabel = () => {
+    let built = printFile()
+    return built === undefined ? undefined : `${built.name} · ${Math.max(1, Math.round(built.bytes.length / 1e6))} MB`
+  }
   let estimate = () => {
     let voxelSize = printResolution()
     let found = printVoxelSizeOk(voxelSize) ? printEstimate(store.parts(), voxelSize) : undefined
     return found === undefined ? "" : describePrintEstimate(found)
   }
-  let replacing: string | undefined
 
   // The paint. The journal and the field are plain values (nothing renders
   // from them directly); the signals say what the panel and the view show.
@@ -353,11 +368,12 @@ export function Modeller() {
     return loaded
   }
 
-  let refreshModels = async () => setModels(await listModels())
+  let refreshRecent = async () => setRecent(await listRecentFiles())
 
   /** Runs a file action, putting its refusal where the dialog shows it. */
   let attempt = async (action: () => Promise<void>) => {
     setNotice(undefined)
+    setWritten(undefined)
     setBusy(true)
     try {
       await action()
@@ -368,53 +384,107 @@ export function Modeller() {
     }
   }
 
-  let save = (typed: string) =>
+  /** Loads a picked or remembered file; it becomes the document's home. */
+  let openFrom = async (path: string, name: string) => {
+    let bytes = await readThrough(path)
+    if (bytes === undefined) throw new Error(`could not read ${name} — it has moved, or is gone`)
+    let opened = await readProject(bytes)
+    if (!loadInto(opened, `open ${name}`)) throw new Error("this file holds more parts than the limit, or two parts with one id")
+    setHome({ kind: "file", path, name })
+    // The opened project's own count: store.parts() reads the old list until the flush.
+    await rememberFile(path, name, opened.parts.length)
+    await refreshRecent()
+    closeFiles()
+    setStatus(`opened ${name}`)
+  }
+
+  let openFromDisk = () =>
     attempt(async () => {
-      let name = cleanName(typed)
-      if (name === "") throw new Error("a model needs a name to be saved under")
-      if (name !== home() && replacing !== name && (await modelExists(name))) {
-        replacing = name
-        throw new Error(`a model called ${name} already exists — Save again to replace it`)
+      let picked = await chooseFileToRead()
+      if (picked === UNSUPPORTED) throw new Error("this device shows no file dialog — open a model from the list below")
+      // Backing out of the dialog is not a failure, and says nothing.
+      if (picked !== undefined) await openFrom(picked.path, picked.name)
+    })
+
+  let openRecent = (entry: RecentFile) => attempt(() => openFrom(entry.path, entry.name))
+
+  /**
+   * Writes the document where it came from, or asks where when that is not
+   * known: Save and Save as are one button, the difference being the home.
+   */
+  let saveToDisk = () =>
+    attempt(async () => {
+      let here = home()
+      let bytes = await writeProject(project(), journal)
+      let target = here.kind === "file" ? here : await choosePlaceToWrite(PROJECT_CHOICE, DEFAULT_PROJECT_NAME)
+      if (target === undefined) return
+      if (target === UNSUPPORTED) {
+        // Upstream downloads here, and the home stays nowhere; the list is
+        // how a file written to this app's storage is found again.
+        let stored = await writeModelInStorage(DEFAULT_PROJECT_NAME, bytes)
+        await rememberFile(stored.path, stored.name, store.parts().length)
+        setWritten(stored.shown)
+      } else {
+        await file(target.path).write(bytes, { atomic: true })
+        setHome({ kind: "file", path: target.path, name: target.name })
+        await rememberFile(target.path, target.name, store.parts().length)
       }
-      replacing = undefined
-      await saveModel(name, await writeProject(project(), journal))
-      setHome(name)
-      setStatus(`saved as ${name}`)
-      await refreshModels()
+      setStatus(`saved ${homeName(home())}`)
+      await refreshRecent()
     })
 
-  let open = (name: string) =>
-    attempt(async () => {
-      let opened = await readProject(await readModel(name))
-      if (!loadInto(opened, `open ${name}`)) throw new Error("this file holds more parts than the limit, or two parts with one id")
-      setHome(name)
-      setExported(undefined)
-      setFilesOpen(false)
-      setStatus(`opened ${name}`)
-    })
-
-  let remove = (name: string) =>
-    attempt(async () => {
-      await deleteModel(name)
-      if (home() === name) setHome(undefined)
-      await refreshModels()
-    })
+  let forgetRecent = (path: string) => attempt(async () => {
+    await forgetFile(path)
+    await refreshRecent()
+  })
 
   let startOver = () =>
     attempt(async () => {
       await clearDraft()
       setDraftAt(undefined)
       palette.set([])
-      setHome(undefined)
-      setExported(undefined)
+      setHome(NOWHERE)
       resetPaint()
       store.load(newModel(), "new model")
       setStatus("new model")
     })
 
-  let exportPrint = () =>
+  // The print takes its name from the document's, without the extension.
+  let stemOf = () => {
+    let name = homeName(home())
+    let dot = name.lastIndexOf(".")
+    return dot > 0 ? name.slice(0, dot) : name
+  }
+
+  // Setting one of the export's numbers throws away a file built with the old ones.
+  let forgetPrintFile =
+    <T,>(set: (value: T) => void) =>
+    (value: T) => {
+      setPrintFile(undefined)
+      set(value)
+    }
+
+  /** A file built and not saved goes with the dialog, as upstream's. */
+  let closeFiles = () => {
+    setPrintFile(undefined)
+    setFilesOpen(false)
+  }
+
+  let savePrintFile = () =>
     attempt(async () => {
-      let name = home() ?? "model"
+      let built = printFile()
+      if (built === undefined) return
+      let target = await choosePlaceToWrite(THREE_MF_CHOICE, built.name)
+      // A dismissed dialog keeps the file here to try again.
+      if (target === undefined) return
+      if (target === UNSUPPORTED) setWritten((await writeExportInStorage(built.name, built.bytes)).shown)
+      else await file(target.path).write(built.bytes, { atomic: true })
+      setPrintFile(undefined)
+    })
+
+  let buildPrint = () =>
+    attempt(async () => {
+      let name = stemOf()
       let voxelSize = printResolution()
       if (!printVoxelSizeOk(voxelSize)) throw new Error(`a print meshes between ${MIN_PRINT_VOXEL_SIZE} and ${DEFAULT_PRINT_VOXEL_SIZE} world units a voxel`)
       let bytes: Uint8Array | undefined
@@ -428,7 +498,7 @@ export function Modeller() {
         setPrinting(undefined)
       }
       if (bytes === undefined) throw new Error("the export ended without a file")
-      setExported(await writeExport(name, bytes))
+      setPrintFile({ bytes, name: `${name}.3mf` })
     })
 
   // A draft is restored silently, as every editor worth using does; one
@@ -447,7 +517,7 @@ export function Modeller() {
         await clearDraft().catch(() => {})
       }
       restored = true
-      await refreshModels().catch(() => {})
+      await refreshRecent().catch(() => {})
     })()
     return () => {
       disposed = true
@@ -466,7 +536,7 @@ export function Modeller() {
       else if (command && key === "y") store.redo()
       else if (command && key === "s") {
         setFilesOpen(true)
-        void refreshModels()
+        void refreshRecent()
       } else if (textInputActive()) return
       else if (key === "delete" || key === "backspace") {
         let part = selected()
@@ -536,7 +606,7 @@ export function Modeller() {
         onPress={() => {
           setNotice(undefined)
           setFilesOpen(true)
-          void refreshModels()
+          void refreshRecent()
         }}
       >
         Files
@@ -669,12 +739,13 @@ export function Modeller() {
       </Show>
 
       <Show when={filesOpen()}>
-        <Modal onClose={() => setFilesOpen(false)}>
+        <Modal onClose={closeFiles}>
           <Card layout={{ width: Math.min(760, windowSize().width - 24), height: Math.min(680, windowSize().height - 24) }}>
             <FilesPanel
-              name={home()}
+              home={home()}
               parts={store.parts().length}
-              models={models()}
+              recent={recent()}
+              showsDialogs={!dialogsMissing()}
               draftAt={draftAt()}
               readout={mesh() === undefined ? "nothing to print" : describeReport(mesh()!.report)}
               height={heightMm()}
@@ -682,18 +753,21 @@ export function Modeller() {
               resolution={printResolution()}
               estimate={estimate()}
               printing={printing()}
-              onResolution={setPrintResolution}
+              builtFile={printFileLabel()}
+              onResolution={forgetPrintFile(setPrintResolution)}
               notice={notice()}
-              exported={exported()}
+              written={written()}
               busy={busy()}
               onNew={() => void startOver()}
-              onSave={name => void save(name)}
-              onOpen={name => void open(name)}
-              onDelete={name => void remove(name)}
-              onExport={() => void exportPrint()}
-              onHeight={mm => setHeightMm(Math.max(1, mm))}
-              onFilaments={count => setFilaments(Math.max(1, Math.round(count)))}
-              onClose={() => setFilesOpen(false)}
+              onOpen={() => void openFromDisk()}
+              onSave={() => void saveToDisk()}
+              onOpenRecent={entry => void openRecent(entry)}
+              onForgetRecent={path => void forgetRecent(path)}
+              onExport={() => void buildPrint()}
+              onSavePrint={() => void savePrintFile()}
+              onHeight={forgetPrintFile((mm: number) => setHeightMm(Math.max(1, mm)))}
+              onFilaments={forgetPrintFile((count: number) => setFilaments(Math.max(1, Math.round(count))))}
+              onClose={closeFiles}
             />
           </Card>
         </Modal>
