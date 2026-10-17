@@ -5,11 +5,12 @@
 // mesher isolate, under an interpreter, once per sample.
 
 import type { Part } from "./part"
-import { compileShape, primitiveHalfExtents, type Distance } from "./primitives"
+import { compileShape, FAR_DISTANCE, primitiveHalfExtents, type Distance } from "./primitives"
 import type { Rgb8 } from "./types"
 
-/** The distance the fold starts from and never exceeds. */
-export const FAR_DISTANCE = 100
+// FAR_DISTANCE, the distance the fold starts from and never exceeds, lives
+// with the primitives (a degenerate polygon returns it).
+export { FAR_DISTANCE }
 /** How many softness widths a soft blend reaches past a shape's box. */
 export const SOFTNESS_REACH = 4
 /** How far from its own surface a part still has a say in colour. */

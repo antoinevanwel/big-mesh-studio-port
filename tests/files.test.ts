@@ -3,7 +3,7 @@ import { dir, file } from "flux:fs"
 import { writeModelInStorage } from "../src/file/library"
 import { forgetFile, listRecentFiles, rememberFile } from "../src/file/recent-files"
 import { readProject, writeProject } from "../src/file/project"
-import { deserialiseOperations, serialiseOperations } from "../src/file/serialise"
+import { deserialiseOperations, FORMAT_VERSION, serialiseOperations, type Operation } from "../src/file/serialise"
 import { writeZip, ZipReader } from "../src/file/zip"
 import { describePrintEstimate, exportThreeMf, exportThreeMfSteps, PRINT_MAX_SAMPLES_PER_AXIS, printEstimate } from "../src/print/print"
 import { fromEuler, placedPart, type Part } from "../src/model/part"
@@ -81,10 +81,80 @@ test("a project round-trips its parts, palette and view", async () => {
   expect(project.parts[2]!.shape).toEqual({ type: "Torus", majorRadius: 0.5, minorRadius: 0.125 })
 })
 
-test("the operation format refuses another version", () => {
-  let bytes = serialiseOperations([])
-  bytes[0] = 3
-  expect(() => deserialiseOperations(bytes)).toThrow("version 3")
+test("the operation format refuses a version it cannot read", () => {
+  // Version 2's bytes parse but mean something else; 6 is from a later build.
+  for (let version of [2, 6]) {
+    let bytes = serialiseOperations([])
+    bytes[0] = version
+    expect(() => deserialiseOperations(bytes)).toThrow(`version ${version}`)
+  }
+})
+
+const operationsOf = (parts: readonly Part[]): Operation[] =>
+  parts.map(part => ({ combine: part.combine, shape: part.shape, origin: part.origin, orientation: part.orientation, softness: part.softness, opacity: part.opacity ?? 1, ...(part.colour == null ? {} : { colour: part.colour }) }))
+
+const square = (half: number) => [
+  { x: -half, z: -half },
+  { x: half, z: -half },
+  { x: half, z: half },
+  { x: -half, z: half },
+]
+
+test("a model without a polygon is written at version 4, and one with a polygon at 5", () => {
+  let fixed = operationsOf(sample())
+  expect(new DataView(serialiseOperations(fixed).buffer).getUint16(0, true)).toBe(4)
+  expect(new DataView(serialiseOperations([]).buffer).getUint16(0, true)).toBe(4)
+  let floor = operationsOf([placedPart("floor", { type: "Polygon", points: square(2), len: 0.2 }, { x: 0, y: 0, z: 0 })])
+  expect(new DataView(serialiseOperations([...fixed, ...floor]).buffer).getUint16(0, true)).toBe(FORMAT_VERSION)
+})
+
+test("a version 3 file, one byte shorter per operation, reads as the same model", () => {
+  let operations = operationsOf(sample())
+  // Each operation written alone, its header and its material byte cut off.
+  let records = operations.map(operation => serialiseOperations([operation]).slice(6, -1))
+  let bytes = new Uint8Array(6 + records.reduce((sum, record) => sum + record.length, 0))
+  let view = new DataView(bytes.buffer)
+  view.setUint16(0, 3, true)
+  view.setUint32(2, records.length, true)
+  let at = 6
+  for (let record of records) {
+    bytes.set(record, at)
+    at += record.length
+  }
+  let read = deserialiseOperations(bytes)
+  expect(read.map(operation => operation.shape)).toEqual(deserialiseOperations(serialiseOperations(operations)).map(operation => operation.shape))
+  expect(read[1]!.colour).toEqual({ r: 10, g: 200, b: 30 })
+  expect(read.every(operation => !("material" in operation))).toBe(true)
+})
+
+test("a polygon round-trips between fixed shapes without shifting one", () => {
+  let triangle = [
+    { x: 0, z: -1 },
+    { x: 1, z: 1 },
+    { x: -1, z: 1 },
+  ]
+  let parts = [
+    placedPart("a", { type: "Box", len: { x: 0.5, y: 0.25, z: 0.75 } }, { x: 1, y: 2, z: 3 }),
+    placedPart("floor", { type: "Polygon", points: triangle, len: 0.25 }, { x: 0, y: 0, z: 0 }, { colour: { r: 1, g: 2, b: 3 } }),
+    placedPart("b", { type: "Capsule", len: 1.5, radius: 0.25 }, { x: -1, y: 0, z: 0 }),
+    placedPart("roof", { type: "Polygon", points: square(2), len: 0.5 }, { x: 0, y: 3, z: 0 }),
+  ]
+  let read = deserialiseOperations(serialiseOperations(operationsOf(parts)))
+  expect(read.map(operation => operation.shape)).toEqual(parts.map(part => part.shape))
+  expect(read[1]!.colour).toEqual({ r: 1, g: 2, b: 3 })
+  expect(read[2]!.origin).toEqual({ x: -1, y: 0, z: 0 })
+})
+
+test("a polygon in an older file, or one claiming too many points, is refused", () => {
+  let bytes = serialiseOperations(operationsOf([placedPart("floor", { type: "Polygon", points: square(1), len: 0.5 }, { x: 0, y: 0, z: 0 })]))
+  let older = bytes.slice()
+  older[0] = 4
+  expect(() => deserialiseOperations(older)).toThrow("carries its own width")
+  // The point count, the first parameter after the 40 fixed bytes, claims a
+  // billion: clamped to the table's 64, which this file cannot supply.
+  let hostile = bytes.slice()
+  new DataView(hostile.buffer).setFloat32(6 + 34, 1e9, true)
+  expect(() => deserialiseOperations(hostile)).toThrow("runs past the end")
 })
 
 test("a project that is not a zip is refused with a sentence", async () => {

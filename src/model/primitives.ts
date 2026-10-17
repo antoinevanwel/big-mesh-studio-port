@@ -1,7 +1,13 @@
-// The primitive table: nine closed signed-distance shapes, each one entry
+// The primitive table: ten closed signed-distance shapes, each one entry
 // (its parameters, its bounds, its distance function and its file code).
 // Ported from big-mesh-studios' packages/sdf. Every axial shape runs along
 // Y, so a part's orientation is what lays a capsule down.
+//
+// The polygon (an outline in XZ extruded along Y, spacescape's floors and
+// roofs) is the one shape whose parameters are not a fixed count: its
+// outline writes its own point count first (upstream ADR 0052). The palette
+// does not offer it, since an outline is drawn rather than typed, but a file
+// holding one opens and draws.
 //
 // The distance functions take the sample as three numbers rather than a
 // vector object: the mesher calls them hundreds of thousands of times per
@@ -19,6 +25,13 @@ export type OperationShape =
   | { readonly type: "Cylinder"; readonly len: number; readonly radius: number }
   | { readonly type: "Torus"; readonly majorRadius: number; readonly minorRadius: number }
   | { readonly type: "HexPrism"; readonly len: number; readonly radius: number }
+  | { readonly type: "Polygon"; readonly points: readonly OutlinePoint[]; readonly len: number }
+
+/** One vertex of a polygon's outline, on the shape's own XZ plane; the extrusion along Y is `len`. */
+export interface OutlinePoint {
+  readonly x: number
+  readonly z: number
+}
 
 export type ShapeType = OperationShape["type"]
 
@@ -28,7 +41,12 @@ export type Distance = (x: number, y: number, z: number) => number
 /** The smallest radius a shape is evaluated at, so a zero never divides. */
 export const MIN_RADIUS = 1e-3
 
-const radius = (value: number): number => (value < MIN_RADIUS ? MIN_RADIUS : value)
+/** The distance the fold starts from and never exceeds, and what a shape that cannot be one returns (upstream core's constant). */
+export const FAR_DISTANCE = 100
+
+// Total: a non-finite size (a field read past the end of a truncated file)
+// clamps too, rather than passing a NaN into the field.
+const radius = (value: number): number => (!Number.isFinite(value) || value < MIN_RADIUS ? MIN_RADIUS : value)
 
 const SIN_60 = 0.8660254037844387
 const TAN_30 = 0.5773502691896258
@@ -133,18 +151,94 @@ export const sdHexPrism = (len: number, r: number, x: number, y: number, z: numb
   return Math.min(Math.max(radial, axial), 0) + Math.sqrt(or * or + oa * oa)
 }
 
-/** One parameter of a primitive, as the transform panel shows it. */
-export interface PrimitiveParameter {
-  readonly name: string
-  readonly arity: 1 | 3
-  readonly label: string
-  readonly axes?: readonly [string, string, string]
-  readonly min: number
-  readonly step: number
+/**
+ * Signed distance to a closed outline in the XZ plane, negative inside: the
+ * nearest edge's clamped projection for the magnitude, a crossing count for
+ * the sign, so the winding does not matter. Assumes the outline does not
+ * cross itself.
+ */
+export const sdPolygon2D = (points: readonly OutlinePoint[], px: number, pz: number): number => {
+  if (points.length < 3) return FAR_DISTANCE
+  let best = Infinity
+  let inside = false
+  for (let i = 0, j = points.length - 1; i < points.length; j = i, i++) {
+    let vi = points[i]!
+    let vj = points[j]!
+    let vx = vi.x - vj.x
+    let vz = vi.z - vj.z
+    let wx = px - vj.x
+    let wz = pz - vj.z
+    // A zero-length edge (two identical vertices) would divide by zero.
+    let length = vx * vx + vz * vz
+    let along = length > 0 ? (wx * vx + wz * vz) / length : 0
+    let t = along < 0 ? 0 : along > 1 ? 1 : along
+    let bx = wx - vx * t
+    let bz = wz - vz * t
+    let squared = bx * bx + bz * bz
+    if (squared < best) best = squared
+    // Half-open in z, so a ray grazing a corner crosses once; the first test
+    // holds only when vi.z !== vj.z, so the division is safe.
+    if (pz >= vj.z !== pz >= vi.z && px < (vx * (pz - vj.z)) / vz + vj.x) inside = !inside
+  }
+  return (inside ? -1 : 1) * Math.sqrt(best)
 }
+
+/**
+ * An outline extruded along Y by `len`, centred on the origin: the outline's
+ * distance and the slab's, combined by max. Exact except outside the outline
+ * and the slab at once, where it reports the longer leg instead of the
+ * hypotenuse (short by up to √2, never long).
+ */
+export const sdPolygonPrism = (points: readonly OutlinePoint[], len: number, x: number, y: number, z: number): number =>
+  Math.max(sdPolygon2D(points, x, z), Math.abs(y) - radius(len) / 2)
+
+/**
+ * The half-extents of an outline extruded by `len`, over the points it has.
+ * Symmetric about the origin: an outline is expected centred on its part's
+ * origin (upstream leaves that to the level editor).
+ */
+export const polygonHalfExtents = (points: readonly OutlinePoint[], len: number): Vec3 => {
+  let half = radius(len) / 2
+  if (points.length === 0) return { x: half, y: half, z: half }
+  let minX = Infinity
+  let maxX = -Infinity
+  let minZ = Infinity
+  let maxZ = -Infinity
+  for (let point of points) {
+    if (point.x < minX) minX = point.x
+    if (point.x > maxX) maxX = point.x
+    if (point.z < minZ) minZ = point.z
+    if (point.z > maxZ) maxZ = point.z
+  }
+  return { x: (maxX - minX) / 2, y: half, z: (maxZ - minZ) / 2 }
+}
+
+/**
+ * One parameter of a primitive: a number, a vector, or a list whose length
+ * is not known from the shape's type (a polygon's outline, which no panel
+ * has an input for and which writes its own width first in a file).
+ */
+export type PrimitiveParameter =
+  | { readonly name: string; readonly arity: 1; readonly label: string; readonly min: number; readonly step: number }
+  | { readonly name: string; readonly arity: 3; readonly label: string; readonly axes?: readonly [string, string, string]; readonly min: number; readonly step: number }
+  | { readonly name: string; readonly arity: "variable"; readonly label: string; readonly minPoints: number; readonly maxPoints: number }
+
+type VariableParameter = Extract<PrimitiveParameter, { readonly arity: "variable" }>
+
+/** A parameter a panel can put an input next to. */
+export type EditableParameter = Extract<PrimitiveParameter, { readonly arity: 1 | 3 }>
+
+const isVariable = (parameter: PrimitiveParameter): parameter is VariableParameter => parameter.arity === "variable"
+
+export const isEditableParameter = (parameter: PrimitiveParameter): parameter is EditableParameter => !isVariable(parameter)
+
+/** A float that is a number, or zero: the last line against a NaN from a file. */
+const finiteOr = (value: number | undefined): number => (typeof value === "number" && Number.isFinite(value) ? value : 0)
 
 interface PrimitiveSpec {
   readonly code: number
+  /** Whether a palette offers it; omitted means yes. */
+  readonly inPalette?: boolean
   readonly parameters: readonly PrimitiveParameter[]
   readonly halfExtents: (shape: any) => Vec3
   readonly compile: (shape: any) => Distance
@@ -230,9 +324,25 @@ const PRIMITIVES: Record<ShapeType, PrimitiveSpec> = {
     halfExtents: (s: { len: number; radius: number }) => ({ x: s.radius, y: s.len / 2, z: s.radius }),
     compile: (s: { len: number; radius: number }) => (x, y, z) => sdHexPrism(s.len, s.radius, x, y, z),
   },
+  Polygon: {
+    code: 9,
+    // A floor and a roof are the same shape; an outline is drawn in the level editor, not typed.
+    inPalette: false,
+    parameters: [
+      // A bound on work: every sample inside the box walks every edge.
+      { name: "points", arity: "variable", label: "Outline", minPoints: 3, maxPoints: 64 },
+      { name: "len", arity: 1, label: "Thickness", min: 0, step: 0.05 },
+    ],
+    halfExtents: (s: { points: readonly OutlinePoint[]; len: number }) => polygonHalfExtents(s.points, s.len),
+    compile: (s: { points: readonly OutlinePoint[]; len: number }) => (x, y, z) => sdPolygonPrism(s.points, s.len, x, y, z),
+  },
 }
 
+/** Every primitive, which is every shape a file may hold. */
 export const PRIMITIVE_NAMES = Object.keys(PRIMITIVES) as ShapeType[]
+
+/** The primitives a palette offers: all but the ones that cannot be built by typing numbers. */
+export const PALETTE_NAMES: readonly ShapeType[] = PRIMITIVE_NAMES.filter(name => PRIMITIVES[name].inPalette !== false)
 
 /** The shape's distance function, parameters baked in. */
 export const compileShape = (shape: OperationShape): Distance => PRIMITIVES[shape.type].compile(shape)
@@ -246,8 +356,21 @@ export const primitiveCode = (type: ShapeType): number => PRIMITIVES[type].code
 
 export const primitiveFromCode = (code: number): ShapeType | null => PRIMITIVE_NAMES.find(name => PRIMITIVES[name].code === code) ?? null
 
-/** How many floats the shape's parameters take in a file. */
-export const parameterFloats = (type: ShapeType): number => PRIMITIVES[type].parameters.reduce((sum, p) => sum + p.arity, 0)
+/** Whether the shape's width in a file is not a function of its type. */
+export const hasVariableWidth = (type: ShapeType): boolean => PRIMITIVES[type].parameters.some(isVariable)
+
+/** The variable parameter's point-count bounds, for a shape that has one. */
+export const pointBounds = (type: ShapeType): readonly [number, number] | undefined => {
+  let parameter = PRIMITIVES[type].parameters.find(isVariable)
+  return parameter === undefined ? undefined : [parameter.minPoints, parameter.maxPoints]
+}
+
+/**
+ * The fixed float count the shape's parameters take in a file. A variable
+ * parameter counts one, the point count it writes first; its points come on
+ * top, so size a buffer from `parametersToFloats` rather than from this.
+ */
+export const parameterFloats = (type: ShapeType): number => PRIMITIVES[type].parameters.reduce((sum, p) => sum + (isVariable(p) ? 1 : p.arity), 0)
 
 export const parametersToFloats = (shape: OperationShape): number[] => {
   let values = shape as unknown as Record<string, unknown>
@@ -257,6 +380,12 @@ export const parametersToFloats = (shape: OperationShape): number[] => {
     if (parameter.arity === 3) {
       let v = value as Vec3
       floats.push(v.x, v.y, v.z)
+    } else if (parameter.arity === "variable") {
+      // Array.isArray, so a number where the outline belongs writes an empty
+      // outline rather than a NaN count.
+      let outline = Array.isArray(value) ? (value as readonly OutlinePoint[]).slice(0, parameter.maxPoints) : []
+      floats.push(outline.length)
+      for (let point of outline) floats.push(finiteOr(point?.x), finiteOr(point?.z))
     } else {
       floats.push(value as number)
     }
@@ -271,6 +400,17 @@ export const shapeFromFloats = (type: ShapeType, floats: readonly number[]): Ope
     if (parameter.arity === 3) {
       shape[parameter.name] = { x: floats[at], y: floats[at + 1], z: floats[at + 2] }
       at += 3
+    } else if (parameter.arity === "variable") {
+      // A count is the one number in a file that can be hostile: clamped to
+      // the table and to what the list can supply.
+      let written = floats[at]!
+      let claimed = Number.isFinite(written) ? Math.floor(written) : parameter.minPoints
+      let available = Math.floor((floats.length - at - 1) / 2)
+      let count = Math.min(Math.max(claimed, parameter.minPoints), parameter.maxPoints, Math.max(available, parameter.minPoints))
+      let points: OutlinePoint[] = []
+      for (let i = 0; i < count; i++) points.push({ x: finiteOr(floats[at + 1 + i * 2]), z: finiteOr(floats[at + 2 + i * 2]) })
+      shape[parameter.name] = points
+      at += 1 + count * 2
     } else {
       shape[parameter.name] = floats[at]
       at += 1
@@ -298,9 +438,10 @@ export interface DimensionGroup {
 
 const AXES = ["x", "y", "z"] as const
 
+/** The shape's parameters as number fields; an outline has none (it is drawn, not typed), so it is left out. */
 export const dimensionGroups = (shape: OperationShape): readonly DimensionGroup[] => {
   let values = shape as unknown as Record<string, unknown>
-  return PRIMITIVES[shape.type].parameters.map(parameter => ({
+  return PRIMITIVES[shape.type].parameters.filter(isEditableParameter).map(parameter => ({
     name: parameter.name,
     label: parameter.label,
     fields:
@@ -321,6 +462,9 @@ export const dimensionGroups = (shape: OperationShape): readonly DimensionGroup[
 export const withParameter = (shape: OperationShape, name: string, axis: "x" | "y" | "z" | undefined, value: number): OperationShape => {
   let values = shape as unknown as Record<string, unknown>
   if (values[name] === undefined) return shape
+  // A number written over an outline is a shape the table cannot represent.
+  let parameter = PRIMITIVES[shape.type].parameters.find(candidate => candidate.name === name)
+  if (parameter === undefined || isVariable(parameter)) return shape
   if (axis === undefined) return { ...values, [name]: value } as unknown as OperationShape
   return { ...values, [name]: { ...(values[name] as Vec3), [axis]: value } } as unknown as OperationShape
 }
@@ -346,8 +490,19 @@ export const defaultShape = (type: ShapeType): OperationShape => {
       return { type, majorRadius: 0.6, minorRadius: 0.2 }
     case "HexPrism":
       return { type, len: 1, radius: 0.5 }
+    // Not offered by the palette; here so the switch stays exhaustive.
+    case "Polygon":
+      return { type, points: squareOutline(0.5), len: 0.2 }
   }
 }
+
+/** A square wound counter-clockwise, for a polygon's first shape. */
+const squareOutline = (half: number): OutlinePoint[] => [
+  { x: -half, z: -half },
+  { x: half, z: -half },
+  { x: half, z: half },
+  { x: -half, z: half },
+]
 
 /** Whether rotating the shape changes it enough to offer the rotation fields. */
 export const isAxial = (type: ShapeType): boolean => type !== "Sphere" && type !== "Ellipsoid" && type !== "RoundBox"

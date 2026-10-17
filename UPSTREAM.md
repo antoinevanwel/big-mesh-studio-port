@@ -11,7 +11,7 @@ it, and where each upstream file landed here.
 ```
 repo:      https://github.com/big-mesh-studios/big-mesh-studios
 branch:    main
-synced-to: fa5c16e31e251c2416ea2fd746498c70b51a8663
+synced-to: d24e4a58b091cd7f26ba3437475600909e00b8ae
 paths:     apps/sdf-modeller packages/csg packages/meshing packages/sdf packages/picking packages/maths packages/ui packages/utils docs/adr
 ```
 
@@ -235,8 +235,8 @@ Triaged 2026-10-17 against upstream `ba86d41` (its last commit touches no tracke
 | 25eb290 | Windows-only fix | skipped | A WebGL alpha issue; the port packs opacity into that byte on purpose. |
 | 825d887 | prettier | skipped | Formatting. |
 | fa5c16e | spacescape move and rotate handles | skipped | Spacescape-only; it touches docs/adr (ADR 0001's table, ADR 0051) to say the level editor took this app's handles. |
-| 1f3cd3f | `Polygon` primitive, format version 5 (spacescape floors, ADR 0052, 0053) | pending | An outline in XZ extruded along Y by `len`, whose point count is written in the file: `sdPolygon2D`/`sdPolygonPrism`, `polygonHalfExtents`, `PrimitiveParameter` as a union with a variable-arity case (`isEditableParameter`), `PALETTE_NAMES` (the parts panel's list, without Polygon), a unit-square `defaultShape`, `radius()` clamping non-finite sizes, and serialise.ts reading and writing version 5. The modeller offers no polygon, but opens and draws a file holding one. Touches src/model/primitives.ts, src/model/field.ts, src/file/serialise.ts, src/ui/parts-panel.tsx and the transform panel. |
-| d24e4a5 | backwards compatibility: versions 3 and 4 read, lowest version written | pending | Port with 1f3cd3f: `READABLE_VERSIONS` {4, 3}, version 3's absent material byte, a polygon refused in an older file, and a model without a polygon written at version 4 (so a saved project opens in a build from before the polygon). The port reads and writes version 4 only today. |
+| 1f3cd3f | `Polygon` primitive, format version 5 (spacescape floors, ADR 0052, 0053) | ported | In src/model/primitives.ts: `sdPolygon2D`/`sdPolygonPrism` (taking x, y, z like the port's other distance functions), `polygonHalfExtents`, `PrimitiveParameter` as a union with the `variable` arity and `isEditableParameter`, `PALETTE_NAMES` (the parts panel's list), the unit-square `defaultShape`, `radius()` clamping non-finite sizes, `dimensionGroups` leaving the outline out and `withParameter` refusing it. src/file/serialise.ts writes and reads version 5 (the point count first, clamped). `FAR_DISTANCE` moved from field.ts to primitives.ts, where the degenerate outline returns it. The modeller offers no polygon, but opens and draws a file holding one. |
+| d24e4a5 | backwards compatibility: versions 3 and 4 read, lowest version written | ported | `READABLE_VERSIONS` {4, 3}, version 3's absent material byte, a polygon refused in an older file, a model without a polygon written at version 4. |
 
 ### Painting, as ported
 
@@ -281,6 +281,14 @@ Triaged 2026-10-17 against upstream `ba86d41` (its last commit touches no tracke
 How close the port has been to upstream over time, newest first. One
 entry per batch of porting work; the ledger holds what each upstream
 commit means, so an entry names commits by hash only.
+
+### 2026-10-17: the polygon and file format version 5
+
+- Pin `fa5c16e` → `d24e4a5`. Nothing pending.
+- Ported: 1f3cd3f, d24e4a5 (the `Polygon` primitive; model.bin version
+  5, versions 4 and 3 read, version 4 written for a model without a
+  polygon, so a saved project still opens in an older build).
+- Deviations: none added or removed.
 
 ### 2026-10-17: system file dialogs
 

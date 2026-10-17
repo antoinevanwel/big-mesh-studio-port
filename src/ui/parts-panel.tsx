@@ -6,7 +6,7 @@ import { For, Show } from "@solidrt/core"
 import { Button, Item, Text, View } from "@solidrt/components"
 import { MAX_PARTS, type ModelStore } from "../model/model-store"
 import { placedPart } from "../model/part"
-import { defaultShape, PRIMITIVE_NAMES } from "../model/primitives"
+import { defaultShape, PALETTE_NAMES } from "../model/primitives"
 import { ACCENT_EDGE, ACCENT_TINT, QUIET } from "../theme"
 import { Heading } from "./bits"
 
@@ -25,7 +25,7 @@ export function PartsPanel(props: {
     <View layout={{ gap: 8 }}>
       <Heading>Add</Heading>
       <View layout={{ flexDirection: "row", flexWrap: "wrap", gap: 4 }}>
-        <For each={PRIMITIVE_NAMES}>
+        <For each={PALETTE_NAMES}>
           {type => (
             <Button
               variant="secondary"

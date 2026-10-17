@@ -4,6 +4,7 @@ import { createModelStore } from "../src/model/model-store"
 import { axisAngle, fromEuler, IDENTITY, multiply, newModel, placedPart, toEuler } from "../src/model/part"
 import { hsvaToRgba, rgbaToHsva } from "../src/model/colour"
 import { nearestPart } from "../src/model/field"
+import { dimensionGroups, PALETTE_NAMES, polygonHalfExtents, PRIMITIVE_NAMES, sdPolygon2D, sdPolygonPrism, shapeFromFloats, withParameter, type OperationShape } from "../src/model/primitives"
 import { armUnderPointer, distanceDragged, type ArmOnScreen } from "../src/view/move-handle"
 import { radiansDragged, ringUnderPointer, type RingOnScreen } from "../src/view/rotate-handle"
 
@@ -130,6 +131,59 @@ test("a picked point selects the part whose surface it lies on", () => {
   let parts = [sphere("left", -2), sphere("right", 2)]
   expect(nearestPart(parts, 1.5, 0, 0)!.id).toBe("right")
   expect(nearestPart(parts, -2, 0.5, 0)!.id).toBe("left")
+})
+
+// An L: a six-unit square without its top-right quarter, the concavity a box cannot stand for.
+const lShape = [
+  { x: 0, z: 0 },
+  { x: 6, z: 0 },
+  { x: 6, z: 3 },
+  { x: 3, z: 3 },
+  { x: 3, z: 6 },
+  { x: 0, z: 6 },
+]
+
+test("an outline's distance is signed by inside, true on both sides, and blind to winding", () => {
+  expect(sdPolygon2D(lShape, 1, 1)).toBeCloseTo(-1, 9)
+  expect(sdPolygon2D(lShape, 4.5, 4.5)).toBeCloseTo(1.5, 9)
+  expect(sdPolygon2D(lShape, 4, 4)).toBeCloseTo(1, 9)
+  expect(sdPolygon2D(lShape, 5, 1.5)).toBeCloseTo(-1, 9)
+  expect(sdPolygon2D(lShape, 7, 1)).toBeCloseTo(1, 9)
+  let reversed = [...lShape].reverse()
+  for (let [x, z] of [[1, 1], [4.5, 4.5], [5, 1.5], [7, 1], [3, 3]] as const) expect(sdPolygon2D(reversed, x, z)).toBeCloseTo(sdPolygon2D(lShape, x, z), 9)
+  // Under three points, or with a repeated vertex, it stays finite.
+  expect(sdPolygon2D(lShape.slice(0, 2), 0, 0)).toBe(100)
+  expect(Number.isFinite(sdPolygon2D([lShape[0]!, lShape[0]!, ...lShape.slice(1)], 1, 1))).toBe(true)
+})
+
+test("a polygon's slab is exact off its faces and walls, and short only past a corner", () => {
+  let room = lShape.map(p => ({ x: p.x - 3, z: p.z - 3 }))
+  expect(sdPolygonPrism(room, 0.4, -2, 1.2, -2)).toBeCloseTo(1, 6)
+  expect(sdPolygonPrism(room, 0.4, 4, 0, -2)).toBeCloseTo(1, 6)
+  // Outside both: the longer leg, not the hypotenuse, never more.
+  let corner = sdPolygonPrism(room, 0.4, 4, 1.2, -2)
+  expect(corner).toBeCloseTo(1, 6)
+  expect(corner).toBeLessThan(Math.SQRT2)
+  expect(Number.isFinite(sdPolygonPrism(room, 0, 0, 0, 0))).toBe(true)
+  expect(Number.isFinite(sdPolygonPrism(room, Number.NaN, 0, 0, 0))).toBe(true)
+})
+
+test("a polygon's box is symmetric over the points it has", () => {
+  expect(polygonHalfExtents([{ x: -1, z: -3 }, { x: 1, z: -3 }, { x: 1, z: 3 }, { x: -1, z: 3 }], 2)).toEqual({ x: 1, y: 1, z: 3 })
+  expect(polygonHalfExtents([{ x: 4, z: -1 }, { x: 6, z: -1 }, { x: 6, z: 1 }, { x: 4, z: 1 }], 2)).toEqual({ x: 1, y: 1, z: 1 })
+})
+
+test("a polygon is not offered, has no outline field, and reads a hostile count clamped", () => {
+  expect(PRIMITIVE_NAMES.includes("Polygon")).toBe(true)
+  expect(PALETTE_NAMES.includes("Polygon")).toBe(false)
+  expect(PALETTE_NAMES.length).toBe(PRIMITIVE_NAMES.length - 1)
+  let floor: OperationShape = { type: "Polygon", points: lShape, len: 0.2 }
+  expect(dimensionGroups(floor).map(group => group.label)).toEqual(["Thickness"])
+  expect(withParameter(floor, "points", undefined, 5)).toBe(floor)
+  let short = shapeFromFloats("Polygon", [1, 0, 0]) as { points: readonly unknown[] }
+  expect(short.points.length).toBe(3)
+  let long = shapeFromFloats("Polygon", [1000, ...new Array(600).fill(0)]) as { points: readonly unknown[] }
+  expect(long.points.length).toBe(64)
 })
 
 test("an arm is grabbed within a fingertip and dragged along its own screen length", () => {

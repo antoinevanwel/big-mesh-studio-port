@@ -87,6 +87,7 @@ test("every primitive meshes closed", () => {
     { type: "Cylinder", len: 1, radius: 0.4 },
     { type: "Torus", majorRadius: 0.6, minorRadius: 0.2 },
     { type: "HexPrism", len: 1, radius: 0.5 },
+    { type: "Polygon", points: [{ x: -0.5, z: -0.5 }, { x: 0.5, z: -0.5 }, { x: 0, z: 0.5 }], len: 0.4 },
   ] as const
   for (let shape of shapes) {
     let result = meshParts([placedPart(shape.type, shape, { x: 0, y: 0, z: 0 })], budgetFor(0.125))!
