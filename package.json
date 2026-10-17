@@ -46,5 +46,8 @@
     "@solidrt/flux-types": "0.0.78",
     "@solidrt/test": "0.0.78",
     "typescript": "^7"
+  },
+  "patchedDependencies": {
+    "@solidrt/cli@0.0.78": "patches/@solidrt%2Fcli@0.0.78.patch"
   }
 }
