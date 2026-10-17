@@ -15,7 +15,7 @@
       "internet": true
     },
     "backup": false,
-    "runtime": null,
+    "runtime": "runtime/dist",
     "android": {
       "versionCode": null,
       "permissions": []

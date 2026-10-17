@@ -1,0 +1,35 @@
+# The app's own runtime: SolidRT's lattice with the capabilities the app does
+# not use left out (docs/runtime, "A custom runtime"). It exists only for the
+# downloads CI packs on a release tag: `make -C runtime runtime` (Linux) and
+# `make -C runtime android-runtime` (the APK's .so) stage it into dist/, which
+# package.json names as the app's runtime. Development keeps the stock player
+# (sol falls back to it with a notice), so there is no player binary here.
+[package]
+name = "big-mesh-studio-port-runtime"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+# Cargo.lock is committed, seeded from SolidRT's own lock at v0.0.78: every
+# crate at the version the stock release was built with, QuickJS above all
+# (sol pack compiles the bytecode with the stock fluxc, which this runtime
+# must load). On a SolidRT upgrade, copy the new release's Cargo.lock over it
+# and run `cargo metadata` here; CI checks it with --locked.
+#
+# Its own cargo workspace, not a member of one above it.
+[workspace]
+
+# The Android .so, and the library the binary links.
+[lib]
+crate-type = ["cdylib", "lib"]
+
+[dependencies]
+# The SolidRT release the app's @solidrt packages are at (sol --version);
+# the build refuses a tag that differs from the installed @solidrt/cli.
+#
+# lattice's optional capabilities at v0.0.78 are video, video-encode, ktx2,
+# wasm (wasm-native) and p2p-relay; none is kept. The app's bundle imports
+# neither flux:video nor flux:wasm, it packs no KTX2 texture (flux:image's
+# transcodeTexture stays declared and throws without ktx2), and it serves no
+# p2p relay. flux:p2p itself is not optional and stays in.
+lattice = { git = "https://github.com/wellawaretech/solidrt", tag = "v0.0.78", default-features = false }

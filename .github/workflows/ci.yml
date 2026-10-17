@@ -31,12 +31,88 @@ jobs:
       - name: Test
         run: bun run sol test
 
-  # sol pack appends the app to the runtime of the machine it runs on, so the
-  # x86-64 build packs on an x86-64 runner. The executable ships in a tarball:
-  # a plain download loses the executable bit, an archive keeps it.
-  pack:
+  # The app's own runtime (runtime/: lattice without video, wasm, ktx2 and
+  # the p2p relay), built only for the release downloads; development and the
+  # test job keep the stock player. The Linux build runs on the oldest runner,
+  # as SolidRT's own release does, so the binary's glibc floor stays at 2.35
+  # (Ubuntu 22.04+, Debian 12+). Rust comes from runtime.mk's pin
+  # (rust-toolchain.toml in @solidrt/cli), hence bun install first.
+  runtime-linux:
     if: startsWith(github.ref, 'refs/tags/v')
     needs: test
+    runs-on: ubuntu-22.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v7
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.3
+      - run: bun install --frozen-lockfile
+      # SDL's build dependencies, SolidRT's linux-system-deps list without
+      # nasm (only libvpx, left out here, needs it).
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update && sudo apt-get install -y \
+            libclang-dev clang \
+            build-essential git make pkg-config cmake ninja-build gnome-desktop-testing \
+            libwayland-dev libdecor-0-dev libpipewire-0.3-dev liburing-dev \
+            libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxfixes-dev libxi-dev libxss-dev libxtst-dev \
+            libxkbcommon-dev libdrm-dev libgbm-dev \
+            libgl1-mesa-dev libgles2-mesa-dev libegl1-mesa-dev \
+            libasound2-dev libpulse-dev libaudio-dev libfribidi-dev libjack-dev libsndio-dev \
+            libdbus-1-dev libibus-1.0-dev libudev-dev libthai-dev libusb-1.0-0-dev
+      # Cargo.lock pins every crate at SolidRT's own v0.0.78 lock; the build
+      # (runtime.mk) does not pass --locked, so a stale lock stops here instead
+      # of being re-resolved. QuickJS above all: sol pack compiles the bytecode
+      # with the stock fluxc, and the runtime must be the same QuickJS.
+      - name: Check Cargo.lock
+        run: cargo metadata --locked --format-version 1 --manifest-path runtime/Cargo.toml > /dev/null
+      - name: Build runtime
+        run: make -C runtime runtime PROFILE=release-opt
+      - uses: actions/upload-artifact@v7
+        with:
+          name: runtime-linux-x64
+          path: runtime/dist
+          if-no-files-found: error
+
+  # The runtime .so for the APK, cross-compiled with cargo-ndk against the
+  # runner's preinstalled NDK (24.04, as SolidRT's own Android build).
+  runtime-android:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: test
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v7
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.3
+      - run: bun install --frozen-lockfile
+      - name: Install build dependencies
+        run: sudo apt-get update && sudo apt-get install -y libclang-dev clang build-essential git make pkg-config cmake ninja-build
+      - run: cargo install cargo-ndk --locked
+      # Cargo.lock pins every crate at SolidRT's own v0.0.78 lock; the build
+      # (runtime.mk) does not pass --locked, so a stale lock stops here instead
+      # of being re-resolved. QuickJS above all: sol pack compiles the bytecode
+      # with the stock fluxc, and the runtime must be the same QuickJS.
+      - name: Check Cargo.lock
+        run: cargo metadata --locked --format-version 1 --manifest-path runtime/Cargo.toml > /dev/null
+      - name: Build runtime
+        run: NDK_HOME="$ANDROID_NDK_ROOT" make -C runtime android-runtime ANDROID_ABI=arm64-v8a PROFILE=release-opt
+      - uses: actions/upload-artifact@v7
+        with:
+          name: runtime-android-arm64-v8a
+          path: runtime/dist
+          if-no-files-found: error
+
+  # sol pack appends the app to the runtime of the machine it runs on, so the
+  # x86-64 build packs on an x86-64 runner. It takes the runtime from
+  # runtime/dist (package.json's solidrt.runtime), where the two jobs above
+  # put it. The executable ships in a tarball: a plain download loses the
+  # executable bit, an archive keeps it.
+  pack:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [runtime-linux, runtime-android]
     runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@v7
@@ -44,9 +120,18 @@ jobs:
         with:
           bun-version: 1.4.3
       - run: bun install --frozen-lockfile
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: runtime-*
+          path: runtime/dist
+          merge-multiple: true
+      # Artifacts do not keep file modes.
+      - run: chmod +x runtime/dist/linux-x64-gnu/solidrt
       - name: Pack
         run: bun run sol pack -o dist/sdf-modeller-linux-x64/sdf-modeller
-      # The runtime's third-party licenses must travel with every copy.
+      # The runtime's third-party licenses must travel with every copy. The
+      # stock runtime's list is a superset of the trimmed one's (it also
+      # names wasmtime, the relay's TLS stack and the codecs).
       - name: Add license notices
         run: cp node_modules/@solidrt/linux-x64-gnu/THIRD-PARTY-NOTICES.txt dist/sdf-modeller-linux-x64/
       - name: Archive
